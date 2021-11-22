@@ -5,5 +5,31 @@
 <use name="DataFormats/Math"/>
 <use name="SimDataFormats/CaloAnalysis"/>
 <use name="RecoLocalCalo/HGCalRecAlgos"/>
+<use name="FWCore/ServiceRegistry"/>
+<use name="CommonTools/UtilAlgos"/>
+<use name="CommonTools/Utils"/>
+<use name="DataFormats/CaloRecHit"/>
+<use name="DataFormats/Common"/>
+<use name="DataFormats/GeometrySurface"/>
+<use name="DataFormats/L1TCorrelator"/>
+<use name="DataFormats/ParticleFlowCandidate"/>
+<use name="DataFormats/ParticleFlowReco"/>
+<use name="FWCore/MessageLogger"/>
+<use name="FWCore/PluginManager"/>
+<use name="FWCore/Utilities"/>
+<use name="Geometry/CaloGeometry"/>
+<use name="Geometry/CommonDetUnit" source_only="1"/>
+<use name="Geometry/HGCalCommonData"/>
+<use name="Geometry/Records"/>
+<use name="MagneticField/Engine"/>
+<use name="MagneticField/Records"/>
+<use name="PhysicsTools/TensorFlow"/>
+<use name="RecoLocalCalo/HGCalRecProducers"/>
+<use name="RecoHGCal/TICL"/>
+<use name="RecoParticleFlow/PFProducer"/>
+<use name="SimDataFormats/Associations"/>
+<use name="TrackingTools/GeomPropagators"/>
+<use name="TrackingTools/Records"/>
+<use name="TrackingTools/TrajectoryState"/>
 <flags EDM_PLUGIN="1"/>
 <library   file="*.cc" name="testRecoHGCalTICL"> </library>
