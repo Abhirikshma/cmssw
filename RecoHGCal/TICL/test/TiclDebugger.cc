@@ -45,6 +45,7 @@
 
 #include "RecoLocalCalo/HGCalRecAlgos/interface/RecHitTools.h"
 #include "SimDataFormats/CaloAnalysis/interface/CaloParticle.h"
+#include "SimDataFormats/CaloAnalysis/interface/SimCluster.h"
 
 //#include "RecoHGCal/TICL/interface/GlobalCache.h"
 #include "RecoHGCal/TICL/plugins/SeedingRegionAlgoBase.h"
@@ -99,6 +100,7 @@ private:
   hgcal::RecHitTools rhtools_;
   edm::ESGetToken<CaloGeometry, CaloGeometryRecord> caloGeometry_token_;
   edm::EDGetTokenT<std::vector<ticl::Trackster>> trackstersMergeToken_;
+  edm::EDGetTokenT<std::vector<ticl::Trackster>> simTSToken_;
   edm::EDGetTokenT<std::vector<reco::Track>> tracksToken_;
   edm::EDGetTokenT<reco::TrackCollection> track_col_token_;
   edm::EDGetTokenT<std::vector<CaloParticle>> caloParticlesToken_;
@@ -131,6 +133,7 @@ private:
   TH1D* h_binDiff_trackster_eta;
   TH1D* h_binDiff_trackster_phi;
   TH1D* h_binDiff_trackster_global;
+  // TS
   TH1D* h_tksters_linked_eta;
   TH1D* h_tksters_tot_eta;
   TH1D* h_eff_eta;
@@ -140,10 +143,27 @@ private:
   TH1D* h_tksters_tot_pT;
   TH1D* h_eff_E;
   TH1D* h_tksters_tot_E;
+  // STS
+  TH1D* h_stksters_linked_eta;
+  TH1D* h_stksters_tot_eta;
+  TH1D* h_st_eff_eta;
+  TH1D* h_st_eff_phi;
+  TH1D* h_stksters_tot_phi;
+  TH1D* h_st_eff_pT;
+  TH1D* h_stksters_tot_pT;
+  TH1D* h_st_eff_E;
+  TH1D* h_stksters_tot_E;
+
+  int NEvent;
 
   int totTracksters;
+  int totTrackstersPropagated;
+  int totsimTracksters;
+  int totsimTrackstersPropagated;
+  int totsimTSfromCP;
   int Ntsos_notvalid;
   int noTracks;
+  int NSimTracksCrossedBoundary;
 };
 
 TiclDebugger::TiclDebugger(const edm::ParameterSet& iConfig)
@@ -161,6 +181,7 @@ TiclDebugger::TiclDebugger(const edm::ParameterSet& iConfig)
       cutTk_(iConfig.getParameter<std::string>("cutTk")) {
   edm::ConsumesCollector&& iC = consumesCollector();
   trackstersMergeToken_ = iC.consumes<std::vector<ticl::Trackster>>(trackstersMerge_);
+  simTSToken_ = iC.consumes<std::vector<ticl::Trackster>>(iConfig.getParameter<edm::InputTag>("label_simTst"));
   tracksToken_ = iC.consumes<std::vector<reco::Track>>(tracks_);
   track_col_token_ = iC.consumes<reco::TrackCollection>(track_col_);
   caloParticlesToken_ = iC.consumes<std::vector<CaloParticle>>(caloParticles_);
@@ -171,9 +192,16 @@ TiclDebugger::TiclDebugger(const edm::ParameterSet& iConfig)
   hdc_token_ = iC.esConsumes<HGCalDDDConstants, IdealGeometryRecord>(
     edm::ESInputTag("",detectorName_));
 
+  NEvent = 0;
+
   totTracksters = 0;
+  totTrackstersPropagated = 0;
+  totsimTracksters = 0;
+  totsimTrackstersPropagated = 0;
+  totsimTSfromCP = 0;
   Ntsos_notvalid = 0;
   noTracks = 0;
+  NSimTracksCrossedBoundary = 0;
 }
 
 TiclDebugger::~TiclDebugger() {}
@@ -211,9 +239,18 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
                                   const edm::EventSetup &es, 
                                   const std::vector<ticl::Trackster> &tracksters, 
                                   edm::Handle<std::vector<CaloParticle>> caloParticlesH) {
+  // distance in cm
+
+  ++NEvent;
   edm::ESHandle<HGCalDDDConstants> hdc  = es.getHandle(hdc_token_);
   //edm::ESHandle<MagneticField> bfield = es.getHandle(bfield_token_);
   edm::ESHandle<Propagator> propagator = es.getHandle(propagator_token_);
+  
+  edm::Handle<std::vector<ticl::Trackster>> simTS_h;
+  evt.getByToken(simTSToken_, simTS_h);
+  auto const &simTracksters = *simTS_h.product();
+
+  const auto &trackstersLink = tracksters;
 
   hgcons_ = hdc.product();
 
@@ -221,21 +258,59 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
 
   edm::Handle<reco::TrackCollection> tracks_h;
   evt.getByToken(track_col_token_, tracks_h);
-  // edm::ProductID trkId = tracks_h.id();
   //auto bFieldProd = bfield.product();
   const Propagator &prop = (*propagator);
 
+  // propagated point collections
   std::vector<std::pair<std::pair<Vector,Vector>, int>> trackPcol; // propagated track points, errors and index of track in collection
-  std::vector<std::pair<Vector, int>> tracksterPcol; // same but for Tracksters
+  std::vector<std::pair<Vector, int>> tracksterPcol; // same but for Tracksters, errors not included here yet
+  std::vector<std::pair<Vector, int>> simtracksterPcol; // simTracksters
 
+  // tiles
   ticl::TICLLayerTile tracksterProp_tile;
+  ticl::TICLLayerTile simtracksterProp_tile;
   ticl::TICLLayerTile trackProp_tile;
 
-  // distance in cm
-  // Propagate tracks to the HGCal first surface
+  bool singleSC_zplus = false;
+  bool singleSC_zminus = false;
+  bool unconverted = false; //set true if all STS originate from CPs
+
+  std::cout << std::endl << std::endl << "-----EVENT "<< NEvent << "-----" <<std::endl;
+
+  // Caloparticle things
+
+  auto const& caloParticles = *caloParticlesH.product();
+  std::cout << std::endl << "n caloparticles = " << caloParticles.size() <<std::endl;
+  h_NCaloParticles->Fill(caloParticles.size());
+
+  for (auto const &cp : caloParticles) {
+
+    for (auto &smtk : cp.g4Tracks()) {
+      std::cout << smtk << std::endl;
+    }
+
+    if (cp.g4Tracks()[0].crossedBoundary()) {
+      if (cp.g4Tracks()[0].getPositionAtBoundary().Z() > 0) {
+        singleSC_zplus = true;
+      }
+      else if (cp.g4Tracks()[0].getPositionAtBoundary().Z() < 0) {
+        singleSC_zminus = true;
+      }
+    }
+
+    for (auto const &SimTk : cp.g4Tracks()) {
+       if (SimTk.crossedBoundary()) {
+
+         ++NSimTracksCrossedBoundary;
+
+       }
+    }
+  }
+  std::cout << "z - : " <<singleSC_zminus << "  z + : " << singleSC_zplus <<std::endl;
+
+  // Propagate tracks to the HGCal front
 
   unsigned nTracks = tracks_h->size();
-  std::cout << std::endl << std::endl << "---NEW EVENT---" << std::endl;
   //std::cout << "nTracks = " << nTracks << std::endl;
   h_NTracks->Fill(nTracks);
 
@@ -251,7 +326,6 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
   TrajectoryStateOnSurface tsos = prop.propagate(fts, firstDisk_[iSide]->surface());
   std::cout << "propagate!" << std::endl;
   if (tsos.isValid()) {
-    // do something with the propagated trajectories
     std::cout << "x: " << tsos.globalPosition().x() <<" y: "<< tsos.globalPosition().y() << " z: " << tsos.globalPosition().z() <<std::endl;
     std::cout << "error : " << tsos.localError().positionError() << std::endl;
 
@@ -267,70 +341,129 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
     trackPcol.push_back(std::make_pair(std::make_pair(trackP,track_err), i));
     trackProp_tile.fill(trackP.Eta(), trackP.Phi(), i);
   }
-  else {
-    ++Ntsos_notvalid;
-  }
+
+  else ++Ntsos_notvalid;
+  
   }
 
-  // Propagate tracksters (barycenters) to the same plane
 
-  const auto &trackstersLink = tracksters;
   std::cout << "# tracksters = " << trackstersLink.size() << std::endl;
+  std::cout << "# simTracksters = " << simTracksters.size() << std::endl;
+
+  // simTrackster things
+
+  int N_from_CP = 0; // number of simTracksters from CaloParticle
+  //std::cout << "STS Seed IDs: ";
+  for (unsigned i = 0; i < simTracksters.size(); ++i) {
+    std::cout << "simtracksters loop" << std::endl;
+    
+    // count STSs from CPs
+    const auto &st = simTracksters[i];
+    //std::cout << st.seedID() << "  ";
+    if (isCP(st, caloParticlesH)) ++N_from_CP;
+
+    Vector baryc = st.barycenter();
+    Vector directnv = st.eigenvectors(0);
+
+    if (abs(directnv.Z()) < 0.00001) {
+      std::cout << "eigenvec = " << directnv << std::endl;
+      continue;
+    }
+
+
+    // Propagate simTracksters to the HGCal front
+
+    if ((baryc.Z() > 0 && singleSC_zplus) || (baryc.Z() < 0 && singleSC_zminus)) {
+      float zVal = hgcons_->waferZ(1, true);
+      zVal *= (baryc.Z() > 0) ? 1 : -1;
+      
+      double par = (zVal - baryc.Z())/directnv.Z();
+
+      double xOnSurface = par*directnv.X() + baryc.X();
+      double yOnSurface = par*directnv.Y() + baryc.Y();
+
+      std::cout << "x = " << xOnSurface << std::endl;
+      std::cout << "y = " << yOnSurface << std::endl;
+      std::cout << "z = " << zVal << std::endl;
+
+      Vector simtracksterP(xOnSurface, yOnSurface, zVal);
+      simtracksterPcol.push_back(std::make_pair(simtracksterP, i));
+      simtracksterProp_tile.fill(simtracksterP.Eta(), simtracksterP.Phi(), i);
+
+      //simtracksters that can be linked
+      h_stksters_tot_eta->Fill(st.barycenter().Eta());
+      h_stksters_tot_phi->Fill(st.barycenter().Phi());
+      h_stksters_tot_pT->Fill(st.raw_pt());
+      h_stksters_tot_E->Fill(st.raw_energy());
+      if (!isCP(st, caloParticlesH)) std::cout << "wrong selection" << std::endl;
+    }
+
+  } // STS loop end
+
+  totsimTracksters+=simTracksters.size();
+  totsimTrackstersPropagated+=simtracksterPcol.size();
+  totsimTSfromCP+=N_from_CP;
+
+  std::cout << std::endl << N_from_CP << " from CPs " << std::endl;
+  //std::cout << "CP prod ID: " << caloParticlesH.id() <<std::endl;
+  if (N_from_CP == static_cast<int>(simTracksters.size())) unconverted = true;
+
+
+
+  // Propagate tracksters (barycenters) to the HGCal front
 
   for (unsigned i = 0; i < trackstersLink.size(); ++i) {
   //for (auto &t : tracksters) {
     std::cout << "tracksters loop" << std::endl;
     const auto &t = trackstersLink[i];
+    //std::cout << "Seed ID : " << t.seedID() << "  Seed Idx: " << t.seedIndex() << std::endl;
     Vector baryc = t.barycenter();
     Vector directnv = t.eigenvectors(0);
     Vector trackster_err(pow(t.sigmas()[0],0.5), pow(t.sigmas()[1], 0.5), 0.0);
-    h_tksters_tot_eta->Fill(t.barycenter().Eta());
-    h_tksters_tot_phi->Fill(t.barycenter().Phi());
-    h_tksters_tot_pT->Fill(t.raw_pt());
-    h_tksters_tot_E->Fill(t.raw_energy());
     
     
-    float zVal = hgcons_->waferZ(1, true);
-    zVal *= (baryc.Z() >= 0) ? 1 : -1;
+    if ((baryc.Z() > 0 && singleSC_zplus) || (baryc.Z() < 0 && singleSC_zminus)) {
+      float zVal = hgcons_->waferZ(1, true);
+      zVal *= (baryc.Z() > 0) ? 1 : -1;
 
-    double par = (zVal - baryc.Z())/directnv.Z();
+      double par = (zVal - baryc.Z())/directnv.Z();
 
-    double xOnSurface = par*directnv.X() + baryc.X();
-    double yOnSurface = par*directnv.Y() + baryc.Y();
+      double xOnSurface = par*directnv.X() + baryc.X();
+      double yOnSurface = par*directnv.Y() + baryc.Y();
 
-    std::cout << "x = " << xOnSurface << std::endl;
-    std::cout << "y = " << yOnSurface << std::endl;
-    std::cout << "z = " << zVal << std::endl;
-    std::cout << "error :  " << t.sigmas()[0] << "  " << t.sigmas()[1] << "  " << t.sigmas()[2] << std::endl;
-    //std::cout << "PCA err :  " << t.sigmasPCA()[0] << "  " << t.sigmasPCA()[1] << "  " << t.sigmasPCA()[2] << std::endl;
+      std::cout << "x = " << xOnSurface << std::endl;
+      std::cout << "y = " << yOnSurface << std::endl;
+      std::cout << "z = " << zVal << std::endl;
+      std::cout << "error :  " << t.sigmas()[0] << "  " << t.sigmas()[1] << "  " << t.sigmas()[2] << std::endl;
+      //std::cout << "PCA err :  " << t.sigmasPCA()[0] << "  " << t.sigmasPCA()[1] << "  " << t.sigmasPCA()[2] << std::endl;
 
-    Vector tracksterP(xOnSurface, yOnSurface, zVal);
-    tracksterPcol.push_back(std::make_pair(tracksterP, i));
-    tracksterProp_tile.fill(tracksterP.Eta(), tracksterP.Phi(), i);
+      Vector tracksterP(xOnSurface, yOnSurface, zVal);
+      tracksterPcol.push_back(std::make_pair(tracksterP, i));
+      tracksterProp_tile.fill(tracksterP.Eta(), tracksterP.Phi(), i);
 
-    h_binDiff_trackster_eta->Fill(abs(tracksterProp_tile.etaBin((tracksterP-trackster_err).Eta()) - tracksterProp_tile.etaBin((tracksterP+trackster_err).Eta())));
-    h_binDiff_trackster_phi->Fill(abs(tracksterProp_tile.phiBin((tracksterP-trackster_err).Phi()) - tracksterProp_tile.phiBin((tracksterP+trackster_err).Phi())));
-    h_binDiff_trackster_global->Fill(abs(tracksterProp_tile.globalBin((tracksterP-trackster_err).Eta(), (tracksterP-trackster_err).Phi()) - 
-                                                          tracksterProp_tile.globalBin((tracksterP+trackster_err).Eta(), (tracksterP+trackster_err).Phi())));
+      h_binDiff_trackster_eta->Fill(abs(tracksterProp_tile.etaBin((tracksterP-trackster_err).Eta()) - tracksterProp_tile.etaBin((tracksterP+trackster_err).Eta())));
+      h_binDiff_trackster_phi->Fill(abs(tracksterProp_tile.phiBin((tracksterP-trackster_err).Phi()) - tracksterProp_tile.phiBin((tracksterP+trackster_err).Phi())));
+      h_binDiff_trackster_global->Fill(abs(tracksterProp_tile.globalBin((tracksterP-trackster_err).Eta(), (tracksterP-trackster_err).Phi()) - 
+                                                            tracksterProp_tile.globalBin((tracksterP+trackster_err).Eta(), (tracksterP+trackster_err).Phi())));
+
+      //tracksters than can be linked
+      h_tksters_tot_eta->Fill(t.barycenter().Eta());
+      h_tksters_tot_phi->Fill(t.barycenter().Phi());
+      h_tksters_tot_pT->Fill(t.raw_pt());
+      h_tksters_tot_E->Fill(t.raw_energy());
+    }
   }
 
-  // finding closest tracks to tracksters
 
-  //std::vector<bool> tracks_mask (trackPcol.size(), 0);
-  totTracksters+=tracksterPcol.size();
+  totTracksters+=trackstersLink.size();
+  totTrackstersPropagated+=tracksterPcol.size();
   std::vector<int> closestTracks (tracksterPcol.size(), -1); // index of closest track for every trackster, arranged as in tracksterPcol
   int nth = 0;
-  auto const& caloParticles = *caloParticlesH.product();
-  std::cout << "n caloparticles = " << caloParticles.size() << std::endl;
-  h_NCaloParticles->Fill(caloParticles.size());
-  /*std::cout << "pdg id: ";
-  for (const auto &cp : caloParticles) {
-    std::cout << cp.pdgId() <<"  ";
-  }*/
-  std::cout << std::endl;
+
+  // Calculating TS-trk separations + finding closest tracks to tracksters
 
   for (auto const i : tracksterPcol) {
-    double minSep = 99999.;
+    double minSep = 600.; // prevent trks from other side from being assigned as closest
     for (auto const j : trackPcol) {
       double sep = pow((i.first - j.first.first).Mag2(),0.5);
       //std::cout << "sep= " << sep << std::endl;
@@ -344,25 +477,11 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
     }
     else std::cout << "sep=" << minSep;
 
-    /*const auto &t = trackstersLink[i.second];
-    if (isCP(t, caloParticlesH)) {
-      //h_distCaloP->Fill(minSep);
-      std::cout << i.second << "from Caloparticle" << std::endl;
-    }
-    if (caloParticles[0].g4Tracks()[0].crossedBoundary() || caloParticles[1].g4Tracks()[0].crossedBoundary()) {
-      h_distCaloP->Fill(minSep);
-      std::cout << i.second << "from Caloparticle" << std::endl;
-    }
-    //2 tracks, both propagated 
-    if (nTracks == 2 && trackPcol.size() == 2) {
-      h_distCaloP->Fill(minSep);
-    }*/
-    //2 tracks
-    if (nTracks == 2) {
+    if (unconverted) {
       h_distCaloP->Fill(minSep);
     }
     ++nth;
-  } // trackster propagated point collection loop end
+  } // tracksterPcol loop end
 
   std::cout << "closest tracks to tracksters: "; 
   for (int i : closestTracks) {
@@ -373,9 +492,8 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
 
   // Search box over tiles + preliminary linking
 
-  //std::vector<int> tracksters_near[trackPcol.second.max()+1]
   std::vector<unsigned> tracksters_near[trackPcol.size()]; // vector element for every track contains the indices of tracksters near to that track
-
+  std::vector<unsigned> simtracksters_near[trackPcol.size()];
   nth = 0;
   for (auto i : trackPcol) {
     auto trackP = i.first.first;
@@ -387,7 +505,11 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
     int etaBin = tracksterProp_tile.etaBin(tk_eta);
     int phiBin = tracksterProp_tile.phiBin(tk_phi);
     //std::cout << etaBin <<"  "<< phiBin << std::endl;
+    int etaBin_st = simtracksterProp_tile.etaBin(tk_eta);
+    int phiBin_st = simtracksterProp_tile.phiBin(tk_phi);
+    //std::cout << "st: " << etaBin_st <<"  "<< phiBin_st << std::endl;
 
+    // deltas from the uncertainties in track propagation
     int delta_eta = abs(trackProp_tile.etaBin((trackP-track_err).Eta()) - trackProp_tile.etaBin((trackP+track_err).Eta()));
     int delta_phi = abs(trackProp_tile.phiBin((trackP-track_err).Phi()) - trackProp_tile.phiBin((trackP+track_err).Phi()));
 
@@ -397,17 +519,32 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
     for (int eta_i = search_box[0]; eta_i < search_box[1] + 1; ++eta_i) {
       for (int phi_i = search_box[2]; phi_i < search_box[3] + 1; ++phi_i) {
         auto tracksters_in_tile = tracksterProp_tile[tracksterProp_tile.globalBin(eta_i,phi_i)]; 
-        //tracksters_near[nth].push_back(trackster_id);
         tracksters_near[nth].insert(std::end(tracksters_near[nth]), std::begin(tracksters_in_tile), std::end(tracksters_in_tile));
       }
-    } // search in box ends
+    } // search in box ends, TS
+
+    std::array<int, 4> search_box_st = {{etaBin_st - delta_eta, etaBin_st + delta_eta, phiBin_st - delta_phi, phiBin_st + delta_phi}};
+
+    for (int eta_i = search_box_st[0]; eta_i < search_box_st[1] + 1; ++eta_i) {
+      for (int phi_i = search_box_st[2]; phi_i < search_box_st[3] + 1; ++phi_i) {
+        auto simtracksters_in_tile = simtracksterProp_tile[simtracksterProp_tile.globalBin(eta_i,phi_i)]; 
+        simtracksters_near[nth].insert(std::end(simtracksters_near[nth]), std::begin(simtracksters_in_tile), std::end(simtracksters_in_tile));
+      }
+    } // search in box ends, STS
+
     ++nth;
   } // track loop ends
 
+
+  // Find uniquely linked TS + fill histos etc. for validation
+
   std::vector<unsigned> linked_unique;
+  std::vector<unsigned> linked_unique_st;
+  int NtrackPcol  = trackPcol.size();
+
   std::cout << std::endl << "box search results (track : tracksters): " << std::endl;
-  int blah  = trackPcol.size();
-  for (int i = 0; i < blah; ++i) {
+  
+  for (int i = 0; i < NtrackPcol; ++i) {
     std::cout << std::endl << "track " << i <<" :";   
     for (auto j : tracksters_near[i]) {
       std::cout << " " << j << " ";
@@ -415,16 +552,43 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
       if (!already_in) {
         linked_unique.push_back(j);
         const auto &t = trackstersLink[j];
+
+        // tracksters that are linked
         h_tksters_linked_eta->Fill(t.barycenter().Eta());
         h_eff_phi->Fill(t.barycenter().Phi()); // divided later by h_tksters_tot_phi
         h_eff_pT->Fill(t.raw_pt());
         h_eff_E->Fill(t.raw_energy());
+
       }
-    }
-  } // track loop ends
+    } // tracksters_near loop ends
+
+    for (auto k : simtracksters_near[i]) {
+      bool already_in_st = (std::find(linked_unique_st.begin(), linked_unique_st.end(), k) != linked_unique_st.end());
+      if (!already_in_st) {
+        linked_unique_st.push_back(k);
+        const auto &st = simTracksters[k];
+
+        // simtracksters that are linked
+        h_stksters_linked_eta->Fill(st.barycenter().Eta());
+        h_st_eff_phi->Fill(st.barycenter().Phi()); // divided later
+        h_st_eff_pT->Fill(st.raw_pt());
+        h_st_eff_E->Fill(st.raw_energy());
+      }
+    } // simtracksters_near loop ends
+
+  } // trackPcol loop ends
+
+  std::cout << std::endl << "TSs linked:  ";
+  for (int i : linked_unique) {
+    std::cout << i << " ";
+  }
+  std::cout << std::endl << "STSs linked:  ";
+  for (int i : linked_unique_st) {
+    std::cout << i << " ";
+  }
 
   
-}
+} // linkTracksters
 
 void TiclDebugger::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup) {
   static const char* particle_kind[] = {"gam", "e", "mu", "pi0", "h", "h0", "?", "!"};
@@ -585,7 +749,7 @@ void TiclDebugger::beginJob() {
   //h_NTracks->GetXaxis()->SetTitle("#");
   h_NCaloParticles = fs->make<TH1D>("NCaloParticles", "Number of Caloparticles", 40, 0., 10.);
 
-  // efficiencies
+  // effect of errors 
   h_binDiff_track_eta = fs->make<TH1D>("diff_Track_eta", "Bin difference - eta", 20, 0., 5.);
   h_binDiff_track_phi = fs->make<TH1D>("diff_Track_phi", "Bin difference - phi", 20, 0., 5.);
   h_binDiff_track_global = fs->make<TH1D>("diff_Track_glob", "Bin difference - global", 20, 0., 5.);
@@ -594,14 +758,15 @@ void TiclDebugger::beginJob() {
   h_binDiff_trackster_phi = fs->make<TH1D>("diff_Trackster_phi", "Bin difference - phi", 20, 0., 5.);
   h_binDiff_trackster_global = fs->make<TH1D>("diff_Trackster_glob", "Bin difference - global", 20, 0., 5.);
 
+  // efficiencies 
   h_tksters_linked_eta = fs->make<TH1D>("trackster_linked_eta", "Trackster linked - eta", 40, -4.0, 4.0);
   h_tksters_tot_eta = fs->make<TH1D>("trackster_eta", "Trackster - eta", 40, -4.0, 4.0);
   h_eff_eta = fs->make<TH1D>("eff_eta", "Efficiency - eta", 40, -4.0, 4.0);
   h_eff_eta->Sumw2();
   h_eff_eta->GetXaxis()->SetTitle("#eta of baryc");
 
-  h_tksters_tot_phi = fs->make<TH1D>("trackster_phi", "Trackster - phi", 40, -1*M_PI, M_PI);
-  h_eff_phi = fs->make<TH1D>("eff_phi", "Efficiency - phi", 40, -1*M_PI, M_PI);
+  h_tksters_tot_phi = fs->make<TH1D>("trackster_phi", "Trackster - phi", 20, -1*M_PI, M_PI);
+  h_eff_phi = fs->make<TH1D>("eff_phi", "Efficiency - phi", 20, -1*M_PI, M_PI);
   h_eff_phi->Sumw2();
   h_eff_phi->GetXaxis()->SetTitle("#phi of baryc");
 
@@ -610,29 +775,62 @@ void TiclDebugger::beginJob() {
   h_eff_pT->Sumw2();
   h_eff_pT->GetXaxis()->SetTitle("pT [GeV]");
 
-  h_tksters_tot_E = fs->make<TH1D>("trackster_E", "Trackster - energy", 50, 0, 500);
-  h_eff_E = fs->make<TH1D>("eff_E", "Efficiency - energy", 50, 0, 500);
+  h_tksters_tot_E = fs->make<TH1D>("trackster_E", "Trackster - energy", 30, 0, 300);
+  h_eff_E = fs->make<TH1D>("eff_E", "Efficiency - energy", 30, 0, 300);
   h_eff_E->Sumw2();
   h_eff_E->GetXaxis()->SetTitle("Energy [GeV]");
+
+  // efficiencies for STS linking
+  h_stksters_linked_eta = fs->make<TH1D>("simtrackster_linked_eta", "simTrackster linked - eta", 40, -4.0, 4.0);
+  h_stksters_tot_eta = fs->make<TH1D>("simtrackster_eta", "simTrackster - eta", 40, -4.0, 4.0);
+  h_st_eff_eta = fs->make<TH1D>("st_eff_eta", "Efficiency - eta", 40, -4.0, 4.0);
+  h_st_eff_eta->Sumw2();
+  h_st_eff_eta->GetXaxis()->SetTitle("#eta of baryc");
+
+  h_stksters_tot_phi = fs->make<TH1D>("simtrackster_phi", "simTrackster - phi", 20, -1*M_PI, M_PI);
+  h_st_eff_phi = fs->make<TH1D>("st_eff_phi", "Efficiency - phi", 20, -1*M_PI, M_PI);
+  h_st_eff_phi->Sumw2();
+  h_st_eff_phi->GetXaxis()->SetTitle("#phi of baryc");
+
+  h_stksters_tot_pT = fs->make<TH1D>("simtrackster_pT", "simTrackster - pT", 50, 0, 50);
+  h_st_eff_pT = fs->make<TH1D>("st_eff_pT", "Efficiency - pT", 50, 0, 50);
+  h_st_eff_pT->Sumw2();
+  h_st_eff_pT->GetXaxis()->SetTitle("pT [GeV]");
+
+  h_stksters_tot_E = fs->make<TH1D>("simtrackster_E", "simTrackster - energy", 30, 0, 300);
+  h_st_eff_E = fs->make<TH1D>("st_eff_E", "Efficiency - energy", 30, 0, 300);
+  h_st_eff_E->Sumw2();
+  h_st_eff_E->GetXaxis()->SetTitle("Energy [GeV]");
 
 }
 
 void TiclDebugger::endJob() {
   std::cout << std::endl;
   std::cout << std::endl << "Total number of Tracksters = " << totTracksters << std::endl;
+  std::cout << "Total number of Tracksters propagated = " << totTrackstersPropagated << std::endl;
+  std::cout << "Total number of simTracksters = " << totsimTracksters << std::endl;
+  std::cout << "Total number of simTracksters propagated = " << totsimTrackstersPropagated << std::endl;
+  std::cout << "sim TS from CP = " << totsimTSfromCP << std::endl;
   std::cout << "Number of tsos not valid = " << Ntsos_notvalid << std::endl;
   std::cout << "tracks not satisfying cutTk = " << noTracks << std::endl;
+  std::cout << "Total no. of SimTracks crossed boundary = " << NSimTracksCrossedBoundary << std::endl;
 
   h_eff_eta->Divide(h_tksters_linked_eta,h_tksters_tot_eta);
   h_eff_phi->Divide(h_tksters_tot_phi);
   h_eff_pT->Divide(h_tksters_tot_pT);
   h_eff_E->Divide(h_tksters_tot_E);
+
+  h_st_eff_eta->Divide(h_stksters_linked_eta,h_stksters_tot_eta);
+  h_st_eff_phi->Divide(h_stksters_tot_phi);
+  h_st_eff_pT->Divide(h_stksters_tot_pT);
+  h_st_eff_E->Divide(h_stksters_tot_E);
 }
 
 // ------------ method fills 'descriptions' with the allowed parameters for the module  ------------
 void TiclDebugger::fillDescriptions(edm::ConfigurationDescriptions& descriptions) {
   edm::ParameterSetDescription desc;
   desc.add<edm::InputTag>("trackstersMerge", edm::InputTag("ticlTrackstersMerge"));
+  desc.add<edm::InputTag>("label_simTst", edm::InputTag("ticlSimTracksters"));
   desc.add<edm::InputTag>("tracks", edm::InputTag("generalTracks"));
   desc.add<edm::InputTag>("caloParticles", edm::InputTag("mix", "MergedCaloTruth"));
   desc.add<edm::InputTag>("layerClusters", edm::InputTag("hgcalLayerClusters"));
