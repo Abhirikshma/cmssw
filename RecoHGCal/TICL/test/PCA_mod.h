@@ -9,27 +9,93 @@
 #include "RecoLocalCalo/HGCalRecAlgos/interface/RecHitTools.h"
 
 #include <iostream>
+#include <array>
 #include <vector>
 #include <set>
+#include <cmath>
 
 #include <Eigen/Core>
 #include <Eigen/Dense>
 
 using namespace ticl;
 
-void assignPCAtoTracksters_mod(std::vector<Trackster> &tracksters,
+typedef math::XYZVector Vector;
+
+unsigned getLayerFromLC(const reco::CaloCluster LC, hgcal::RecHitTools rhtools) {
+  std::vector<std::pair<DetId, float>> thisclusterHits = LC.hitsAndFractions();
+  auto layer = rhtools.getLayerWithOffset(thisclusterHits[0].first);
+  return layer;
+}
+
+Vector barycenterInLayer(const Trackster &ts,
+                         const std::vector<reco::CaloCluster> &layerClusters,
+                         std::vector<unsigned> vertices_in_layer) {
+  double wt_x = 0.;
+  double wt_y = 0.;
+  double wt_z = 0.;
+  double wt = 0.;
+  for (auto v : vertices_in_layer) { // in a layer
+    auto thisLC = layerClusters[ts.vertices(v)];
+    double thisE = thisLC.energy();
+    wt_x += thisE*thisLC.x();
+    wt_y += thisE*thisLC.y();
+    wt_z += thisE*thisLC.z();
+    wt += thisE;
+  }
+  Vector result(wt_x/wt, wt_y/wt, wt_z/wt);
+  return result;
+}
+
+std::vector<std::vector<unsigned>> sortByLayer(const Trackster &ts,
+                                               const std::vector<reco::CaloCluster> &layerClusters,
+                                               hgcal::RecHitTools rhtools) {
+  size_t N = ts.vertices().size();
+
+  std::vector<std::vector<unsigned>> result;
+  result.resize(rhtools.lastLayer()+1);
+
+  for (unsigned i = 0; i < N; ++i) {
+    auto thisLC = layerClusters[ts.vertices(i)];
+    auto layer = getLayerFromLC(thisLC, rhtools);
+    result[layer].push_back(i);
+  }
+  return result;
+}
+
+std::array<std::vector<unsigned>, 100> translateTrackster(const Trackster &ts,
+                                        const std::vector<reco::CaloCluster> &layerClusters,
+                                        hgcal::RecHitTools rhtools,
+                                        unsigned maxE_layer,
+                                        int shift_to = 50) {
+  std::array<std::vector<unsigned>, 100> result; 
+  int shift = shift_to - (int)maxE_layer;
+
+  auto vert_by_layer = sortByLayer(ts, layerClusters, rhtools);
+
+  for (unsigned i = 1; i <= rhtools.lastLayer(); ++i) {
+    auto vert_in_layer = vert_by_layer[i];
+    if (vert_in_layer.empty()) continue;
+    for (auto v : vert_in_layer) result[i+shift-1].push_back(v);
+  }
+  return result;
+}
+
+std::array<double, 100> assignPCAtoTracksters_mod(std::vector<Trackster> &tracksters,
                                  const std::vector<reco::CaloCluster> &layerClusters,
                                  const edm::ValueMap<std::pair<float, float>> &layerClustersTime,
                                  hgcal::RecHitTools rhtools,
                                  double z_limit_em,
                                  bool energyWeight=true) {
   LogDebug("TrackstersPCA_Eigen") << "------- Eigen -------" << std::endl;
-
+  int nonZero_trackster = 0;
+  std::array<double, 100> layer_Efrac = {};
   for (auto &trackster : tracksters) {
     Eigen::Vector3d point;
     point << 0., 0., 0.;
     Eigen::Vector3d barycenter;
     barycenter << 0., 0., 0.;
+    Eigen::Vector3d filtered_barycenter;
+    filtered_barycenter << 0., 0., 0.;
 
     auto fillPoint = [&](const reco::CaloCluster &c, const float weight = 1.f) {
       point[0] = weight * c.x();
@@ -44,6 +110,7 @@ void assignPCAtoTracksters_mod(std::vector<Trackster> &tracksters,
     trackster.setRawEmPt(0.f);
 
     size_t N = trackster.vertices().size();
+    if (N == 0) continue;
     float weight = 1.f / N;
     float weights2_sum = 0.f;
     Eigen::Vector3d sigmas;
@@ -86,69 +153,75 @@ void assignPCAtoTracksters_mod(std::vector<Trackster> &tracksters,
     std::pair<float, float> timeTrackster = timeEstimator.fixSizeHighestDensity(times, timeErrors);
 
     // LayerCluster filtering for the modified PCA
-
-    std::vector<reco::CaloCluster> layerClusters_by_layer[rhtools.lastLayer()+1]; //layers can be from 0 -> lastLayer()
-    std::vector<unsigned> vertices_by_layer[rhtools.lastLayer()+1]; 
+    auto vertices_by_layer = sortByLayer(trackster, layerClusters, rhtools);
     std::vector<double> layerClusterenergies; 
 
-    std::cout << std::endl;
-
-    for (size_t i = 0; i < N; ++i) {
-      std::cout << "LC " << i << "  layer : ";
-      const reco::CaloCluster thislayerCluster = layerClusters[trackster.vertices(i)];
-      std::vector<std::pair<DetId, float>> thisclusterHits = thislayerCluster.hitsAndFractions();
-      auto layer = rhtools.getLayerWithOffset(thisclusterHits[0].first);
-
-      //std::cout << rhtools.getLayer(thisclusterHits[0].first) << "  w/ offset : " << layer << "  Z : " << (rhtools.getPosition(thisclusterHits[0].first)).z();
-
-      layerClusters_by_layer[layer].push_back(thislayerCluster);
-      vertices_by_layer[layer].push_back(i);
-      layerClusterenergies.push_back(thislayerCluster.energy());
-      std::cout << std::endl;
+    for (unsigned i = 0; i <= rhtools.lastLayer(); ++i) {
+      auto vertices_in_layer = vertices_by_layer[i];
+      for (auto v : vertices_in_layer) {
+        layerClusterenergies.push_back(layerClusters[trackster.vertices(v)].energy());
+      }
     }
 
+    // max E LC
     auto result_glob = std::max_element(layerClusterenergies.begin(), layerClusterenergies.end());
     auto maxE_vertex = std::distance(layerClusterenergies.begin(), result_glob);
-    auto maxE_layerCluster = layerClusters[trackster.vertices(maxE_vertex)];
-    auto maxE_layer = rhtools.getLayerWithOffset((maxE_layerCluster.hitsAndFractions())[0].first);
-
-    std::cout << "Max E layer = " << maxE_layer << std::endl;
+    auto maxE_layer = getLayerFromLC(layerClusters[trackster.vertices(maxE_vertex)], rhtools);
+    //double maxEnergy = layerClusters[trackster.vertices(maxE_vertex)].energy();
+    double maxElayer_energy = 0; // energy in layer of max E LC
+    for (auto vrt : vertices_by_layer[maxE_layer]) maxElayer_energy += layerClusters[trackster.vertices(vrt)].energy();
 
     std::vector<unsigned> filtered_idx; // higest energy vertices in a layer
+    double filtered_energy = 0;
 
     for (unsigned i = 1; i <= rhtools.lastLayer(); ++i) {
-      auto layerClusters_in_layer = layerClusters_by_layer[i];
       auto vertices_in_layer = vertices_by_layer[i];
-
       if (vertices_in_layer.empty()) continue;
 
-      std::cout << " Layer " << i << " : ";
-      for (auto i : vertices_in_layer) std::cout << "  " << i;
-
       std::vector<double> energies_in_layer;
-      for (auto j : layerClusters_in_layer) energies_in_layer.push_back(j.energy());
+      for (auto vrt : vertices_in_layer) energies_in_layer.push_back(layerClusters[trackster.vertices(vrt)].energy());
     
       auto result_inlayer = std::max_element(energies_in_layer.begin(),energies_in_layer.end());
-      unsigned maxE_idx = std::distance(energies_in_layer.begin(),result_inlayer);
-
-      std::cout << "  - maxE = " << energies_in_layer[maxE_idx] << std::endl;
+      unsigned maxE_id = std::distance(energies_in_layer.begin(),result_inlayer);
       
-      if ((int)i >= (int)maxE_layer - 10 && (int)i <= (int)maxE_layer + 15)
-      filtered_idx.push_back(vertices_in_layer[maxE_idx]);
+      if ((int)i >= (int)maxE_layer - 20 && (int)i <= (int)maxE_layer + 5) {
+        auto filtered_vert = vertices_in_layer[maxE_id];
+        filtered_idx.push_back(filtered_vert);
+        
+        const auto maxE_LC = layerClusters[trackster.vertices(filtered_vert)]; 
+        fillPoint(maxE_LC, maxE_LC.energy()*(1.f/trackster.vertex_multiplicity(filtered_vert)));
+        for (size_t j = 0; j < 3; ++j) filtered_barycenter[j] += point[j];
+        filtered_energy += maxE_LC.energy();
+      }
+      
     }
 
-    std::cout << std::endl;
+    filtered_barycenter /= filtered_energy;
+
+    // Translate trackster to have layer of max E LC at 50
+    auto vertT_by_layer = translateTrackster(trackster, layerClusters, rhtools, maxE_layer);
+    
+    // E frac by layer for translated trackster
+    for (unsigned i = 0; i < 100; ++i) {
+      auto vertices_in_layer = vertT_by_layer[i];
+      //if (vertices_in_layer.empty()) continue;
+      double e_layer = 0.;
+      for (auto v : vertices_in_layer) e_layer += layerClusters[trackster.vertices(v)].energy();
+      //e_layer /= maxEnergy;
+      e_layer /= maxElayer_energy;
+      layer_Efrac[i] += e_layer;
+    }
+
+    std::cout << "trackster energy = " << trackster.raw_energy() << std::endl;
 
     // Compute the Covariance Matrix and the sum of the squared weights, used
     // to compute the correct normalization.
     // The barycenter has to be known.
-    std::cout << "# before filtering : " << N << std::endl;
-    std::cout << "# filtered idx: " << filtered_idx.size() << std::endl;
     for (size_t i : filtered_idx) {
       fillPoint(layerClusters[trackster.vertices(i)]);
       if (energyWeight && trackster.raw_energy())
-        weight =
-            (layerClusters[trackster.vertices(i)].energy() / trackster.vertex_multiplicity(i)) / trackster.raw_energy();
+        weight = (layerClusters[trackster.vertices(i)].energy() / trackster.vertex_multiplicity(i)) / trackster.raw_energy();
+        //weight = (layerClusters[trackster.vertices(i)].energy() / trackster.vertex_multiplicity(i)) / filtered_energy;
       weights2_sum += weight * weight;
       for (size_t x = 0; x < 3; ++x)
         for (size_t y = 0; y <= x; ++y) {
@@ -156,6 +229,7 @@ void assignPCAtoTracksters_mod(std::vector<Trackster> &tracksters,
           covM(y, x) = covM(x, y);
         }
     }
+ 
     covM *= 1. / (1. - weights2_sum);
 
     // Perform the actual decomposition
@@ -213,6 +287,14 @@ void assignPCAtoTracksters_mod(std::vector<Trackster> &tracksters,
     LogDebug("TrackstersPCA") << "SigmasEigen in PCA space: " << sigmasEigen[2] << ", " << sigmasEigen[1] << ", "
                               << sigmasEigen[0] << std::endl;
     LogDebug("TrackstersPCA") << "covM:     \n" << covM << std::endl;
+    ++nonZero_trackster;
   }
+
+  // mean E frac per layer
+  if (nonZero_trackster > 0)
+  for (int i = 0; i < 100; ++i) {
+    layer_Efrac[i] /= nonZero_trackster;
+  }
+  return layer_Efrac;
 }
 #endif

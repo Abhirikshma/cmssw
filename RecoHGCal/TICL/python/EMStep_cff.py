@@ -8,7 +8,7 @@ from RecoHGCal.TICL.filteredLayerClustersProducer_cfi import filteredLayerCluste
 
 filteredLayerClustersEM = _filteredLayerClustersProducer.clone(
     clusterFilter = "ClusterFilterByAlgoAndSizeAndLayerRange",
-    min_cluster_size = 3, # inclusive
+    min_cluster_size = 3, # inclusive, was 3
     max_layerId = 30,
     algo_number = 8,
     iteration_label = "EM"
@@ -46,7 +46,7 @@ ticlEMStepTask = cms.Task(ticlSeedingGlobal
 filteredLayerClustersHFNoseEM = filteredLayerClustersEM.clone(
     LayerClusters = 'hgcalLayerClustersHFNose',
     LayerClustersInputMask = 'ticlTrackstersHFNoseTrkEM',
-    min_cluster_size = 3, # inclusive
+    min_cluster_size = 3, # inclusive, was 3
     algo_number = 9,
     iteration_label = "EMn"
 )
