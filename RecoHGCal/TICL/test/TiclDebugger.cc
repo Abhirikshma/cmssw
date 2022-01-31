@@ -10,6 +10,7 @@
 #include <numeric>
 #include <algorithm>
 #include <cmath>
+#include <array>
 
 // user include files
 #include "FWCore/Framework/interface/Frameworkfwd.h"
@@ -69,6 +70,7 @@
 
 #include "TTree.h"
 #include "TH2D.h"
+#include "THStack.h"
 
 #include "PCA_mod.h"
 
@@ -85,6 +87,7 @@ public:
 
 private:
   typedef math::XYZVector Vector;
+  typedef ticl::Trackster::IterationIndex TracksterIterIndex;
   void beginJob() override;
   void beginRun(const edm::Run&, const edm::EventSetup&) override;
   void analyze(const edm::Event&, const edm::EventSetup&) override;
@@ -133,9 +136,13 @@ private:
   TTree* tree_;
   TH1D* h_distAll;
   TH1D* h_st_distAll;
+  TH1D* h_distTS_notLinked;
+  TH1D* h_distSTS_notLinked;
   TH1D* h_distCaloP;
+
   TH1D* h_NTracks;
   TH1D* h_NCaloParticles;
+
   TH1D* h_binDiff_track_eta;
   TH1D* h_binDiff_track_phi;
   TH1D* h_binDiff_track_global;
@@ -166,16 +173,51 @@ private:
   TH1D* h_theta_tk_TS;
   TH1D* h_theta_tk_STS;
 
+  TH1D* h_EfracLinked_TS;
+  TH1D* h_EfracLinked_STS;
+
+  TH1D* h_EfracLayer_TS_EM;
+  TH1D* h_EfracLayer_TS_HAD;
+  TH1D* h_EfracLayer_STS_EM;
+  TH1D* h_EfracLayer_STS_HAD;
+  TH1D* h_stdDevLayer_TS;
+
+  TH1D* h_layerOfLargeE_TS_EM;
+  TH1D* h_layerOfLargeE_TS_HAD;
+  TH1D* h_layerOfLargeE_STS;
+
+  TH1D* h_lowEmaxLayer_STS_E;
+  THStack* stack_1;
+
   int NEvent;
 
   int totTracksters;
   int totTrackstersPropagated;
   int totsimTracksters;
   int totsimTrackstersPropagated;
+  int totTrackstersLinked;
+  int totsimTrackstersLinked;
   int totsimTSfromCP;
   int Ntsos_notvalid;
   int noTracks;
   int NSimTracksCrossedBoundary;
+  int NsimTS_notValid;
+
+  double totEnergyLinked_TS;
+  double totEnergyLinked_STS;
+
+  double layer_Efrac_mean_TS_EM [100];
+  double layer_Efrac_mean_TS_HAD [100];
+  double layer_Efrac_mean_STS_EM [100];
+  double layer_Efrac_mean_STS_HAD [100];
+
+  double stdDev_by_layer [100];
+
+  std::vector<int> badPCAs;
+
+  // tracksters selected for propagation
+  std::vector<ticl::Trackster> selectedTS;
+  std::vector<ticl::Trackster> selectedSTS;
 };
 
 TiclDebugger::TiclDebugger(const edm::ParameterSet& iConfig)
@@ -211,10 +253,22 @@ TiclDebugger::TiclDebugger(const edm::ParameterSet& iConfig)
   totTrackstersPropagated = 0;
   totsimTracksters = 0;
   totsimTrackstersPropagated = 0;
+  totTrackstersLinked = 0;
+  totsimTrackstersLinked = 0;
   totsimTSfromCP = 0;
   Ntsos_notvalid = 0;
   noTracks = 0;
   NSimTracksCrossedBoundary = 0;
+  NsimTS_notValid = 0;
+
+  for (int i = 0; i < 100; ++i) {
+    layer_Efrac_mean_TS_EM[i] = 0;
+    layer_Efrac_mean_TS_HAD[i] = 0;
+    layer_Efrac_mean_STS_EM[i] = 0;
+    layer_Efrac_mean_STS_HAD[i] = 0;
+    stdDev_by_layer[i] = 0;
+  }
+  
 }
 
 TiclDebugger::~TiclDebugger() {}
@@ -255,13 +309,21 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
                                   edm::Handle<std::vector<CaloParticle>> caloParticlesH) {
   // distance in cm
 
-  ++NEvent;
+  std::cout << "Linking begin" << std::endl;
   edm::ESHandle<HGCalDDDConstants> hdc  = es.getHandle(hdc_token_);
   //edm::ESHandle<MagneticField> bfield = es.getHandle(bfield_token_);
   edm::ESHandle<Propagator> propagator = es.getHandle(propagator_token_);
 
-  const auto &trackstersLink = trackstersInput;
-  const auto &simTracksters = simTrackstersInput;
+  auto &trackstersLink = trackstersInput;
+  auto &simTracksters = simTrackstersInput;
+
+  /*sort(trackstersLink.begin(), trackstersLink.end(), [](const ticl::Trackster &a, const ticl::Trackster &b){
+    return a.raw_energy() > b.raw_energy();
+  });
+
+  sort(simTracksters.begin(), simTracksters.end(), [](const ticl::Trackster &a, const ticl::Trackster &b){
+    return a.raw_energy() > b.raw_energy();
+  });*/
 
   hgcons_ = hdc.product();
 
@@ -278,15 +340,19 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
   std::vector<std::pair<Vector, int>> simtracksterPcol; // simTracksters
 
   // tiles
-  ticl::TICLLayerTile tracksterProp_tile;
-  ticl::TICLLayerTile simtracksterProp_tile;
-  ticl::TICLLayerTile trackProp_tile;
+  ticl::TICLLayerTile tracksterProp_tile_fw;
+  ticl::TICLLayerTile tracksterProp_tile_bw;
+  ticl::TICLLayerTile simtracksterProp_tile_fw;
+  ticl::TICLLayerTile simtracksterProp_tile_bw;
+  ticl::TICLLayerTile trackProp_tile_fw;
+  ticl::TICLLayerTile trackProp_tile_bw;
 
   bool singleSC_zplus = false;
   bool singleSC_zminus = false;
   bool unconverted = false; //set true if all STS originate from CPs
 
-  std::cout << std::endl << std::endl << "-----EVENT "<< NEvent << "-----" <<std::endl;
+  totEnergyLinked_TS = 0.;
+  totEnergyLinked_STS = 0.;
 
   // Caloparticle things
 
@@ -294,8 +360,8 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
   std::cout << std::endl << "n caloparticles = " << caloParticles.size() <<std::endl;
   h_NCaloParticles->Fill(caloParticles.size());
 
-  double CP_zlpusE = -1.;
-  double CP_zminusE = -1.;
+  double CP_zlpusE = 0.;
+  double CP_zminusE = 0.;
   for (auto const &cp : caloParticles) {
 
     for (auto &smtk : cp.g4Tracks()) {
@@ -324,9 +390,12 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
   std::cout << "z - : " <<singleSC_zminus << "  z + : " << singleSC_zplus <<std::endl;
 
   // Propagate tracks to the HGCal front
-   std::vector<Vector> trackP_momentum;
+
+  //std::vector<Vector> trackP_momentum;
+  std::vector<Vector> trackP_mom_fw;
+  std::vector<Vector> trackP_mom_bw;
   unsigned nTracks = tracks_h->size();
-  //std::cout << "nTracks = " << nTracks << std::endl;
+
   h_NTracks->Fill(nTracks);
 
   for (unsigned i = 0; i < nTracks; ++i) {
@@ -350,13 +419,31 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
     double y_err = pow(tsos.localError().positionError().yy(), 0.5);
     Vector track_err(x_err, y_err, 0.0);
 
-    h_binDiff_track_eta->Fill(abs(trackProp_tile.etaBin((trackP-track_err).Eta()) - trackProp_tile.etaBin((trackP+track_err).Eta())));
-    h_binDiff_track_phi->Fill(abs(trackProp_tile.phiBin((trackP-track_err).Phi()) - trackProp_tile.phiBin((trackP+track_err).Phi())));
-    h_binDiff_track_global->Fill(abs(trackProp_tile.globalBin((trackP-track_err).Eta(), (trackP-track_err).Phi()) - trackProp_tile.globalBin((trackP+track_err).Eta(), (trackP+track_err).Phi())));
-    
     trackPcol.push_back(std::make_pair(std::make_pair(trackP,track_err), i));
-    trackP_momentum.push_back(tkP_momentum);
-    trackProp_tile.fill(trackP.Eta(), trackP.Phi(), i);
+    //trackP_momentum.push_back(tkP_momentum);
+    
+
+    if (trackP.Eta() > 0 && singleSC_zplus) {
+      // extent of error
+      h_binDiff_track_eta->Fill(abs(trackProp_tile_fw.etaBin((trackP-track_err).Eta()) - trackProp_tile_fw.etaBin((trackP+track_err).Eta())));
+      h_binDiff_track_phi->Fill(abs(trackProp_tile_fw.phiBin((trackP-track_err).Phi()) - trackProp_tile_fw.phiBin((trackP+track_err).Phi())));
+      h_binDiff_track_global->Fill(abs(trackProp_tile_fw.globalBin((trackP-track_err).Eta(), (trackP-track_err).Phi()) - 
+                                                trackProp_tile_fw.globalBin((trackP+track_err).Eta(), (trackP+track_err).Phi())));
+      
+      trackProp_tile_fw.fill(trackP.Eta(), trackP.Phi(), i);
+      trackP_mom_fw.push_back(tkP_momentum);
+    }
+
+    else if (trackP.Eta() < 0 && singleSC_zminus) {
+      // extent of error
+      h_binDiff_track_eta->Fill(abs(trackProp_tile_bw.etaBin((trackP-track_err).Eta()) - trackProp_tile_bw.etaBin((trackP+track_err).Eta())));
+      h_binDiff_track_phi->Fill(abs(trackProp_tile_bw.phiBin((trackP-track_err).Phi()) - trackProp_tile_bw.phiBin((trackP+track_err).Phi())));
+      h_binDiff_track_global->Fill(abs(trackProp_tile_bw.globalBin((trackP-track_err).Eta(), (trackP-track_err).Phi()) - 
+                                                trackProp_tile_bw.globalBin((trackP+track_err).Eta(), (trackP+track_err).Phi())));
+      
+      trackProp_tile_bw.fill(trackP.Eta(), trackP.Phi(), i);
+      trackP_mom_bw.push_back(tkP_momentum);
+    }
   }
 
   else ++Ntsos_notvalid;
@@ -370,14 +457,17 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
   // simTrackster things
 
   int N_from_CP = 0; // number of simTracksters from CaloParticle
-  std::vector<Vector> sts_eigenv;
-  //std::cout << "STS Seed IDs: ";
+  std::vector<Vector> sts_eigenv_fw;
+  std::vector<Vector> sts_eigenv_bw;
+  std::vector<unsigned> selectedSTS_idx;
+  selectedSTS.clear();
+
   for (unsigned i = 0; i < simTracksters.size(); ++i) {
     std::cout << "simtracksters loop" << std::endl;
-    
-    // count STSs from CPs
+
     const auto &st = simTracksters[i];
-    //std::cout << st.seedID() << "  ";
+  
+    std::cout << "E = " << st.raw_energy() << std::endl;
     if (isCP(st, caloParticlesH)) ++N_from_CP;
 
     Vector baryc = st.barycenter();
@@ -392,12 +482,12 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
     bool zminus_reject = true;
 
     if (baryc.Z() > 0 && singleSC_zplus) {
-      if (st.raw_energy() > 0.7*CP_zlpusE)
+      if (st.raw_energy() > 0.*CP_zlpusE)
       zplus_reject = false;
     }
 
     else if (baryc.Z() < 0 && singleSC_zminus) {
-      if (st.raw_energy() > 0.7*CP_zminusE)
+      if (st.raw_energy() > 0.*CP_zminusE)
       zminus_reject = false;
     }
 
@@ -407,7 +497,7 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
     //if ((baryc.Z() > 0 && singleSC_zplus) || (baryc.Z() < 0 && singleSC_zminus)) {
     if (!(zplus_reject && zminus_reject)) {
       //if (zplus_reject && zminus_reject)  continue;
-      sts_eigenv.push_back(directnv);
+      selectedSTS.push_back(st);
 
       float zVal = hgcons_->waferZ(1, true);
       zVal *= (baryc.Z() > 0) ? 1 : -1;
@@ -422,8 +512,8 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
       std::cout << "z = " << zVal << std::endl;
 
       Vector simtracksterP(xOnSurface, yOnSurface, zVal);
+      selectedSTS_idx.push_back(i);
       simtracksterPcol.push_back(std::make_pair(simtracksterP, i));
-      simtracksterProp_tile.fill(simtracksterP.Eta(), simtracksterP.Phi(), i);
 
       //simtracksters that can be linked
       h_stksters_tot_eta->Fill(st.barycenter().Eta());
@@ -431,6 +521,18 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
       h_stksters_tot_pT->Fill(st.raw_pt());
       h_stksters_tot_E->Fill(st.raw_energy());
       if (!isCP(st, caloParticlesH)) std::cout << "wrong selection" << std::endl;
+
+      if (simtracksterP.Eta() > 0) {
+        simtracksterProp_tile_fw.fill(simtracksterP.Eta(), simtracksterP.Phi(), i);
+        sts_eigenv_fw.push_back(directnv);
+      }
+
+      else if (simtracksterP.Eta() < 0) {
+        simtracksterProp_tile_bw.fill(simtracksterP.Eta(), simtracksterP.Phi(), i);
+        sts_eigenv_bw.push_back(directnv);
+      }
+
+      //if (st.vertices().size() > 0) totsimTracksters++;
     }
 
   } // STS loop end
@@ -446,13 +548,18 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
 
 
   // Propagate tracksters (barycenters) to the HGCal front
+  selectedTS.clear();
 
-  std::vector<Vector> ts_eigenv;
+  std::vector<Vector> ts_eigenv_fw;
+  std::vector<Vector> ts_eigenv_bw;
+  std::vector<unsigned> selectedTS_idx;
   for (unsigned i = 0; i < trackstersLink.size(); ++i) {
-  //for (auto &t : tracksters) {
     std::cout << "tracksters loop" << std::endl;
     const auto &t = trackstersLink[i];
-    //std::cout << "Seed ID : " << t.seedID() << "  Seed Idx: " << t.seedIndex() << std::endl;
+    
+    std::cout << "E = " << t.raw_energy() << std::endl;
+    if (t.ticlIteration() == TracksterIterIndex::EM) std::cout << "EM" << std::endl;
+    else if (t.ticlIteration() == TracksterIterIndex::HAD) std::cout << "HAD" << std::endl;
     Vector baryc = t.barycenter();
     Vector directnv = t.eigenvectors(0);
     Vector trackster_err(pow(t.sigmas()[0],0.5), pow(t.sigmas()[1], 0.5), 0.0);
@@ -473,7 +580,8 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
     
     //if ((baryc.Z() > 0 && singleSC_zplus) || (baryc.Z() < 0 && singleSC_zminus)) {
     if (!(zplus_reject && zminus_reject)) {
-      ts_eigenv.push_back(directnv);
+
+      selectedTS.push_back(t);
 
       float zVal = hgcons_->waferZ(1, true);
       zVal *= (baryc.Z() > 0) ? 1 : -1;
@@ -490,116 +598,151 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
       //std::cout << "PCA err :  " << t.sigmasPCA()[0] << "  " << t.sigmasPCA()[1] << "  " << t.sigmasPCA()[2] << std::endl;
 
       Vector tracksterP(xOnSurface, yOnSurface, zVal);
+      selectedTS_idx.push_back(i);
       tracksterPcol.push_back(std::make_pair(tracksterP, i));
-      tracksterProp_tile.fill(tracksterP.Eta(), tracksterP.Phi(), i);
-
-      h_binDiff_trackster_eta->Fill(abs(tracksterProp_tile.etaBin((tracksterP-trackster_err).Eta()) - tracksterProp_tile.etaBin((tracksterP+trackster_err).Eta())));
-      h_binDiff_trackster_phi->Fill(abs(tracksterProp_tile.phiBin((tracksterP-trackster_err).Phi()) - tracksterProp_tile.phiBin((tracksterP+trackster_err).Phi())));
-      h_binDiff_trackster_global->Fill(abs(tracksterProp_tile.globalBin((tracksterP-trackster_err).Eta(), (tracksterP-trackster_err).Phi()) - 
-                                                            tracksterProp_tile.globalBin((tracksterP+trackster_err).Eta(), (tracksterP+trackster_err).Phi())));
+      
 
       //tracksters than can be linked
       h_tksters_tot_eta->Fill(t.barycenter().Eta());
       h_tksters_tot_phi->Fill(t.barycenter().Phi());
       h_tksters_tot_pT->Fill(t.raw_pt());
       h_tksters_tot_E->Fill(t.raw_energy());
+
+      if (tracksterP.Eta() > 0) {
+        tracksterProp_tile_fw.fill(tracksterP.Eta(), tracksterP.Phi(), i);
+        ts_eigenv_fw.push_back(directnv);
+
+        // extent of error
+        h_binDiff_trackster_eta->Fill(abs(tracksterProp_tile_fw.etaBin((tracksterP-trackster_err).Eta()) - tracksterProp_tile_fw.etaBin((tracksterP+trackster_err).Eta())));
+        h_binDiff_trackster_phi->Fill(abs(tracksterProp_tile_fw.phiBin((tracksterP-trackster_err).Phi()) - tracksterProp_tile_fw.phiBin((tracksterP+trackster_err).Phi())));
+        h_binDiff_trackster_global->Fill(abs(tracksterProp_tile_fw.globalBin((tracksterP-trackster_err).Eta(), (tracksterP-trackster_err).Phi()) - 
+                                                              tracksterProp_tile_fw.globalBin((tracksterP+trackster_err).Eta(), (tracksterP+trackster_err).Phi())));
+      }
+
+      else if (tracksterP.Eta() < 0) {
+        tracksterProp_tile_bw.fill(tracksterP.Eta(), tracksterP.Phi(), i);
+        ts_eigenv_bw.push_back(directnv);
+
+        // extent of error
+        h_binDiff_trackster_eta->Fill(abs(tracksterProp_tile_bw.etaBin((tracksterP-trackster_err).Eta()) - tracksterProp_tile_bw.etaBin((tracksterP+trackster_err).Eta())));
+        h_binDiff_trackster_phi->Fill(abs(tracksterProp_tile_bw.phiBin((tracksterP-trackster_err).Phi()) - tracksterProp_tile_bw.phiBin((tracksterP+trackster_err).Phi())));
+        h_binDiff_trackster_global->Fill(abs(tracksterProp_tile_bw.globalBin((tracksterP-trackster_err).Eta(), (tracksterP-trackster_err).Phi()) - 
+                                                              tracksterProp_tile_bw.globalBin((tracksterP+trackster_err).Eta(), (tracksterP+trackster_err).Phi())));
+      }
     }
   }
 
 
   totTracksters+=trackstersLink.size();
   totTrackstersPropagated+=tracksterPcol.size();
-  std::vector<int> closestTracks (tracksterPcol.size(), -1); // index of closest track for every trackster, arranged as in tracksterPcol
-  int nth = 0;
-
-  // Calculating TS/STS-trk separations + finding closest tracks to tracksters
-
-  for (auto const i : tracksterPcol) {
-    double minSep = 600.; // prevent trks from other side from being assigned as closest
-    for (auto const j : trackPcol) {
-      double sep = pow((i.first - j.first.first).Mag2(),0.5);
-      if (sep < minSep) {
-        minSep = sep;
-        closestTracks[nth] = j.second;
-      }
-    }
-    if (minSep > 0 && minSep < 1000) {
-      h_distAll->Fill(minSep);
-    }
-    else std::cout << "sep=" << minSep;
-
-    if (unconverted) {
-      h_distCaloP->Fill(minSep);
-    }
-    ++nth;
-  } // tracksterPcol loop end
-
-  for (auto const i : simtracksterPcol) {
-    double minSep = 600.; // prevent trks from other side from being assigned as closest
-    for (auto const j : trackPcol) {
-      double sep = pow((i.first - j.first.first).Mag2(),0.5);
-      if (sep < minSep) {
-        minSep = sep;
-      }
-    }
-    if (minSep < 600) {
-      h_st_distAll->Fill(minSep);
-    }
-  } // simtracksterPcol loop end
-
-  std::cout << "closest tracks to tracksters: "; 
-  for (int i : closestTracks) {
-    std::cout << i <<" ";
-  }
-  std::cout << std::endl;
 
 
   // Search box over tiles + preliminary linking
 
   std::vector<unsigned> tracksters_near[trackPcol.size()]; // vector element for every track contains the indices of tracksters near to that track
   std::vector<unsigned> simtracksters_near[trackPcol.size()];
-  nth = 0;
+  int nth = 0;
   for (auto i : trackPcol) {
     auto trackP = i.first.first;
+    //auto track_err = i.first.second;
+
     double tk_eta = trackP.Eta();
     double tk_phi = trackP.Phi();
-    auto track_err = i.first.second;
-    //double delta = 0.05;
 
-    int etaBin = tracksterProp_tile.etaBin(tk_eta);
-    int phiBin = tracksterProp_tile.phiBin(tk_phi);
-    //std::cout << etaBin <<"  "<< phiBin << std::endl;
-    int etaBin_st = simtracksterProp_tile.etaBin(tk_eta);
-    int phiBin_st = simtracksterProp_tile.phiBin(tk_phi);
-    //std::cout << "st: " << etaBin_st <<"  "<< phiBin_st << std::endl;
+    double delta = 0.02;
 
-    // deltas from the uncertainties in track propagation
-    int delta_eta = abs(trackProp_tile.etaBin((trackP-track_err).Eta()) - trackProp_tile.etaBin((trackP+track_err).Eta()));
-    int delta_phi = abs(trackProp_tile.phiBin((trackP-track_err).Phi()) - trackProp_tile.phiBin((trackP+track_err).Phi()));
+    if (tk_eta > 0) {
+      /*int etaBin = tracksterProp_tile_fw.etaBin(tk_eta);
+      int phiBin = tracksterProp_tile_fw.phiBin(tk_phi);
 
-    //std::array<int, 4> search_box = tracksterProp_tile.searchBoxEtaPhi(tk_eta - delta, tk_eta + delta, tk_phi - delta, tk_phi + delta);
-    //std::array<int, 4> search_box = {{etaBin - 1, etaBin + 1, phiBin - 1, phiBin + 1}}; // 3x3
-    std::array<int, 4> search_box = {{etaBin - delta_eta, etaBin + delta_eta, phiBin - delta_phi, phiBin + delta_phi}}; // f(uncertainties)
+      int etaBin_st = simtracksterProp_tile_fw.etaBin(tk_eta); // same as bins from TS tile
+      int phiBin_st = simtracksterProp_tile_fw.phiBin(tk_phi);
 
-    for (int eta_i = search_box[0]; eta_i < search_box[1] + 1; ++eta_i) {
-      for (int phi_i = search_box[2]; phi_i < search_box[3] + 1; ++phi_i) {
-        auto tracksters_in_box = tracksterProp_tile[tracksterProp_tile.globalBin(eta_i,phi_i)]; 
-        tracksters_near[nth].insert(std::end(tracksters_near[nth]), std::begin(tracksters_in_box), std::end(tracksters_in_box));
+
+      // deltas from the uncertainties in track propagation
+      int delta_eta = abs(trackProp_tile_fw.etaBin((trackP-track_err).Eta()) - trackProp_tile_fw.etaBin((trackP+track_err).Eta()));
+      int delta_phi = abs(trackProp_tile_fw.phiBin((trackP-track_err).Phi()) - trackProp_tile_fw.phiBin((trackP+track_err).Phi()));*/
+
+      double eta_min = ((tk_eta - delta) > 0) ? (tk_eta - delta):0;
+
+      std::array<int, 4> search_box = tracksterProp_tile_fw.searchBoxEtaPhi(eta_min, tk_eta + delta, tk_phi - delta, tk_phi + delta);
+      if (search_box[2] > search_box[3]) {
+        double temp = search_box[3];
+        search_box[3] = search_box[2];
+        search_box[2] = temp;
       }
-    } // search in box ends, TS
 
-    //std::array<int, 4> search_box_st = {{etaBin_st - 1, etaBin_st + 1, phiBin_st - 1, phiBin_st + 1}}; // 3x3
-    std::array<int, 4> search_box_st = {{etaBin_st - delta_eta, etaBin_st + delta_eta, phiBin_st - delta_phi, phiBin_st + delta_phi}}; // f(uncertainties)
+      //std::array<int, 4> search_box = {{etaBin - 1, etaBin + 1, phiBin - 1, phiBin + 1}}; // 3x3
+      //std::array<int, 4> search_box = {{etaBin - delta_eta, etaBin + delta_eta, phiBin - delta_phi, phiBin + delta_phi}}; // f(uncertainties)
 
-    for (int eta_i = search_box_st[0]; eta_i < search_box_st[1] + 1; ++eta_i) {
-      for (int phi_i = search_box_st[2]; phi_i < search_box_st[3] + 1; ++phi_i) {
-        auto simtracksters_in_box = simtracksterProp_tile[simtracksterProp_tile.globalBin(eta_i,phi_i)]; 
-        simtracksters_near[nth].insert(std::end(simtracksters_near[nth]), std::begin(simtracksters_in_box), std::end(simtracksters_in_box));
+
+      for (int eta_i = search_box[0]; eta_i <= search_box[1]; ++eta_i) {
+        for (int phi_i = search_box[2]; phi_i <= search_box[3]; ++phi_i) {
+          auto tracksters_in_box = tracksterProp_tile_fw[tracksterProp_tile_fw.globalBin(eta_i,phi_i)]; 
+          tracksters_near[nth].insert(std::end(tracksters_near[nth]), std::begin(tracksters_in_box), std::end(tracksters_in_box));
+        }
+      } // search in box ends, TS
+
+      std::array<int, 4> search_box_st = simtracksterProp_tile_fw.searchBoxEtaPhi(eta_min, tk_eta + delta, tk_phi - delta, tk_phi + delta);
+      if (search_box_st[2] > search_box_st[3]) {
+        double temp = search_box_st[3];
+        search_box_st[3] = search_box_st[2];
+        search_box_st[2] = temp;
       }
-    } // search in box ends, STS
+      //std::array<int, 4> search_box_st = {{etaBin_st - 1, etaBin_st + 1, phiBin_st - 1, phiBin_st + 1}}; // 3x3
+      //std::array<int, 4> search_box_st = {{etaBin_st - delta_eta, etaBin_st + delta_eta, phiBin_st - delta_phi, phiBin_st + delta_phi}}; // f(uncertainties)
+
+      for (int eta_i = search_box_st[0]; eta_i <= search_box_st[1]; ++eta_i) {
+        for (int phi_i = search_box_st[2]; phi_i <= search_box_st[3]; ++phi_i) {
+          auto simtracksters_in_box = simtracksterProp_tile_fw[simtracksterProp_tile_fw.globalBin(eta_i,phi_i)]; 
+          simtracksters_near[nth].insert(std::end(simtracksters_near[nth]), std::begin(simtracksters_in_box), std::end(simtracksters_in_box));
+        }
+      } // search in box ends, STS
+    }
+
+    if (tk_eta < 0) {
+
+      double eta_min = ((abs(tk_eta) - delta) > 0) ? (abs(tk_eta) - delta):0;
+
+      std::array<int, 4> search_box = tracksterProp_tile_bw.searchBoxEtaPhi(eta_min, abs(tk_eta) + delta, tk_phi - delta, tk_phi + delta);
+      if (search_box[2] > search_box[3]) {
+        double temp = search_box[3];
+        search_box[3] = search_box[2];
+        search_box[2] = temp;
+      }
+      for (auto &a : search_box)
+      std::cout << a << " ";
+      std::cout << std::endl;
+      //std::array<int, 4> search_box = {{etaBin - 1, etaBin + 1, phiBin - 1, phiBin + 1}}; // 3x3
+      //std::array<int, 4> search_box = {{etaBin - delta_eta, etaBin + delta_eta, phiBin - delta_phi, phiBin + delta_phi}}; // f(uncertainties)
+
+      for (int eta_i = search_box[0]; eta_i <= search_box[1]; ++eta_i) {
+        for (int phi_i = search_box[2]; phi_i <= search_box[3]; ++phi_i) {
+          auto tracksters_in_box = tracksterProp_tile_bw[tracksterProp_tile_bw.globalBin(eta_i,phi_i)]; 
+          tracksters_near[nth].insert(std::end(tracksters_near[nth]), std::begin(tracksters_in_box), std::end(tracksters_in_box));
+        }
+      } // search in box ends, TS
+
+      std::array<int, 4> search_box_st = simtracksterProp_tile_bw.searchBoxEtaPhi(eta_min, abs(tk_eta) + delta, tk_phi - delta, tk_phi + delta);
+      if (search_box_st[2] > search_box_st[3]) {
+        double temp = search_box_st[3];
+        search_box_st[3] = search_box_st[2];
+        search_box_st[2] = temp;
+      }
+      //std::array<int, 4> search_box_st = {{etaBin_st - 1, etaBin_st + 1, phiBin_st - 1, phiBin_st + 1}}; // 3x3
+      //std::array<int, 4> search_box_st = {{etaBin_st - delta_eta, etaBin_st + delta_eta, phiBin_st - delta_phi, phiBin_st + delta_phi}}; // f(uncertainties)
+
+      for (int eta_i = search_box_st[0]; eta_i <= search_box_st[1]; ++eta_i) {
+        for (int phi_i = search_box_st[2]; phi_i <= search_box_st[3]; ++phi_i) {
+          auto simtracksters_in_box = simtracksterProp_tile_bw[simtracksterProp_tile_bw.globalBin(eta_i,phi_i)]; 
+          simtracksters_near[nth].insert(std::end(simtracksters_near[nth]), std::begin(simtracksters_in_box), std::end(simtracksters_in_box));
+        }
+      } // search in box ends, STS
+    }
 
     ++nth;
   } // track loop ends
+
 
 
   // Find uniquely linked TS + fill histos etc. for validation
@@ -619,6 +762,7 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
       if (!already_in) {
         linked_unique.push_back(j);
         const auto &t = trackstersLink[j];
+        totEnergyLinked_TS+=t.raw_energy();
 
         // tracksters that are linked
         h_tksters_linked_eta->Fill(t.barycenter().Eta());
@@ -635,6 +779,7 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
       if (!already_in_st) {
         linked_unique_st.push_back(k);
         const auto &st = simTracksters[k];
+        totEnergyLinked_STS+=st.raw_energy();
 
         // simtracksters that are linked
         h_stksters_linked_eta->Fill(st.barycenter().Eta());
@@ -646,6 +791,14 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
 
   } // trackPcol loop ends
 
+  totTrackstersLinked += linked_unique.size();
+  totsimTrackstersLinked += linked_unique_st.size();
+
+  if (CP_zlpusE+CP_zminusE > 0) {
+    h_EfracLinked_TS->Fill(totEnergyLinked_TS/(CP_zlpusE+CP_zminusE));
+    h_EfracLinked_STS->Fill(totEnergyLinked_STS/(CP_zlpusE+CP_zminusE));
+  }
+
   std::cout << std::endl << "TSs linked:  ";
   for (int i : linked_unique) {
     std::cout << i << " ";
@@ -654,26 +807,101 @@ void TiclDebugger::linkTracksters(const edm::Event &evt,
   for (int i : linked_unique_st) {
     std::cout << i << " ";
   }
+  std::cout << std::endl;
 
-  // e_tk dot e_PCA for S/TS
-  for (auto trk_p : trackP_momentum) {
-    auto trkV = trk_p.Unit();
-    for (auto v : ts_eigenv) { //TS
-      double cos_theta = trkV.Dot(v);
-      h_theta_tk_TS->Fill(cos_theta);
+  std::vector<int> closestTracks (tracksterPcol.size(), -1); // index of closest track for every trackster, arranged as in tracksterPcol
+  nth = 0;
+
+  // Calculating TS/STS-trk separations + finding closest tracks to tracksters
+
+  std::cout << "TS closest dist: ";
+  for (auto const i : tracksterPcol) {
+    double minSep = 600.; // prevent trks from other side from being assigned as closest
+    for (auto const j : trackPcol) {
+      double sep = pow((i.first - j.first.first).Mag2(),0.5);
+      if (sep < minSep) {
+        minSep = sep;
+        closestTracks[nth] = j.second;
+      }
+    }
+    if (minSep < 600) {
+      h_distAll->Fill(minSep);
+      std::cout << minSep <<" ";
+    }
+    if (unconverted) {
+      h_distCaloP->Fill(minSep);
+    }
+    if (std::find(linked_unique.begin(), linked_unique.end(), i.second) == linked_unique.end()) {// propagated but not linked 
+    h_distTS_notLinked->Fill(minSep);
     }
 
-    for (auto v : sts_eigenv) { //STS
+    ++nth;
+  } // tracksterPcol loop end
+  std::cout <<  std::endl;
+
+  //std::cout << "STS closest dist: ";
+  for (auto const i : simtracksterPcol) {
+    double minSep = 600.; // prevent trks from other side from being assigned as closest
+    for (auto const j : trackPcol) {
+      double sep = pow((i.first - j.first.first).Mag2(),0.5);
+      if (sep < minSep) {
+        minSep = sep;
+      }
+    }
+    if (minSep < 600) {
+      h_st_distAll->Fill(minSep);
+      //std::cout << minSep <<" ";
+    }
+
+    if (std::find(linked_unique_st.begin(), linked_unique_st.end(), i.second) == linked_unique_st.end()) {// propagated but not linked
+    h_distSTS_notLinked->Fill(minSep);
+    }
+
+  } // simtracksterPcol loop end
+  //std::cout <<  std::endl;
+
+  std::cout << "closest tracks to tracksters: "; 
+  for (int i : closestTracks) {
+    std::cout << i <<" ";
+  }
+  std::cout << std::endl;
+
+  // e_tk dot e_PCA for S/TS
+  for (auto trk_p : trackP_mom_fw) { //fwd
+    auto trkV = trk_p.Unit();
+    for (auto v : ts_eigenv_fw) { //TS
       double cos_theta = trkV.Dot(v);
-      h_theta_tk_STS->Fill(cos_theta);
+      h_theta_tk_TS->Fill(abs(cos_theta));
+      if (abs(cos_theta) < 0.8) badPCAs.push_back(NEvent);
+    }
+    for (auto v : sts_eigenv_fw) { //STS
+      double cos_theta = trkV.Dot(v);
+      h_theta_tk_STS->Fill(abs(cos_theta));
+      if (abs(cos_theta) < 0.8) badPCAs.push_back(NEvent);
+    }
+  }
+  for (auto trk_p : trackP_mom_bw) { //bwd
+    auto trkV = trk_p.Unit();
+    for (auto v : ts_eigenv_bw) { //TS
+      double cos_theta = trkV.Dot(v);
+      h_theta_tk_TS->Fill(abs(cos_theta));
+      if (abs(cos_theta) < 0.8) badPCAs.push_back(NEvent);
+    }
+    for (auto v : sts_eigenv_bw) { //STS
+      double cos_theta = trkV.Dot(v);
+      h_theta_tk_STS->Fill(abs(cos_theta));
+      if (abs(cos_theta) < 0.8) badPCAs.push_back(NEvent);
     }
   }
 
-
+std::cout << "Linking done" << std::endl;
   
 } // linkTracksters
 
 void TiclDebugger::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup) {
+  ++NEvent;
+  std::cout << std::endl << std::endl << "-----EVENT "<< NEvent << "-----" <<std::endl;
+
   static const char* particle_kind[] = {"gam", "e", "mu", "pi0", "h", "h0", "?", "!"};
   using namespace edm;
   using std::begin;
@@ -688,6 +916,13 @@ void TiclDebugger::analyze(const edm::Event& iEvent, const edm::EventSetup& iSet
   edm::Handle<std::vector<ticl::Trackster>> simTS_h;
   iEvent.getByToken(simTSToken_, simTS_h);
   auto const &simTracksters = *simTS_h.product();
+  
+  // local copies for the modified PCA
+  std::vector<ticl::Trackster> tracksters_ = tracksters;
+  auto &tracksters_mutable = tracksters_;
+
+  std::vector<ticl::Trackster> simTracksters_ = simTracksters;
+  auto &simTracksters_mutable = simTracksters_;
 
   edm::Handle<std::vector<CaloParticle>> caloParticlesH;
   iEvent.getByToken(caloParticlesToken_, caloParticlesH);
@@ -701,31 +936,16 @@ void TiclDebugger::analyze(const edm::Event& iEvent, const edm::EventSetup& iSet
   iEvent.getByToken(clustersTime_token_, clustersTimeH);
   const auto &layerClustersTimes = *clustersTimeH;
 
-  std::vector<ticl::Trackster> tracksters_;
-
-  for (auto ts : tracksters) {
-    tracksters_.push_back(ts);
-  }
-
-  std::vector<ticl::Trackster> &tracksters_mutable = tracksters_;
-
-  std::vector<ticl::Trackster> simTracksters_;
-
-  for (auto sts : simTracksters) {
-    simTracksters_.push_back(sts);
-  }
-
-  std::vector<ticl::Trackster> &simTracksters_mutable = simTracksters_;
-
-
-  // PCA with cleaning
-  assignPCAtoTracksters_mod(tracksters_mutable,
+  std::cout << "N tracksters " << tracksters_.size() << std::endl;
+  std::cout << "N simTracksters " << simTracksters_.size() << std::endl;
+ // PCA with cleaning
+  auto layer_Efrac_TS = assignPCAtoTracksters_mod(tracksters_mutable,
                         layerClusters,
                         layerClustersTimes,
                         rhtools_,
                         rhtools_.getPositionLayer(rhtools_.lastLayerEE()).z());
 
-  assignPCAtoTracksters_mod(simTracksters_mutable,
+  auto layer_Efrac_STS = assignPCAtoTracksters_mod(simTracksters_mutable,
                         layerClusters,
                         layerClustersTimes,
                         rhtools_,
@@ -733,6 +953,166 @@ void TiclDebugger::analyze(const edm::Event& iEvent, const edm::EventSetup& iSet
 
   // Linking
   linkTracksters(iEvent, iSetup, tracksters_mutable, simTracksters_mutable, caloParticlesH);
+
+  for (int i = 0; i < 100; ++i) {
+    layer_Efrac_TS[i]+=layer_Efrac_STS[i];
+  }
+
+  // more Trackster diagonistics, by layer
+  // TS
+  int nonZero_trackster = 0;
+  std::array<double, 100> layer_Efrac_TS_EM = {};
+  std::array<double, 100> layer_Efrac_TS_HAD = {};
+  double stdDev_by_layer_ [100] = {};
+  for (auto &t : selectedTS) {
+    unsigned N = t.vertices().size();
+    if (N == 0) continue;
+    ++nonZero_trackster;
+
+    auto vertices_by_layer = sortByLayer(t, layerClusters, rhtools_);
+
+    std::vector<double> LCenergies;
+    for (unsigned i = 0; i < N; ++i) {
+      LCenergies.push_back(layerClusters[t.vertices(i)].energy());
+    }
+
+    auto maxE_vert = std::distance(LCenergies.begin(), std::max_element(LCenergies.begin(), LCenergies.end()));
+    auto maxE_layer = rhtools_.getLayerWithOffset(layerClusters[t.vertices(maxE_vert)].hitsAndFractions()[0].first);
+    if (t.ticlIteration() == TracksterIterIndex::EM)
+    h_layerOfLargeE_TS_EM->Fill(maxE_layer);
+    else if (t.ticlIteration() == TracksterIterIndex::HAD)
+    h_layerOfLargeE_TS_HAD->Fill(maxE_layer);
+    double maxElayer_energy = 0;
+    for (auto v : vertices_by_layer[maxE_layer]) maxElayer_energy += layerClusters[t.vertices(v)].energy();
+
+    auto vertT_by_layer = translateTrackster(t, layerClusters, rhtools_, maxE_layer);
+
+    // energy weighted standard dev of LC by layer
+    for (int i = 0; i < 100; ++i) {
+      auto vertices_in_layer = vertT_by_layer[i];
+      if (vertices_in_layer.size() <= 1) continue;
+      std::cout << "size " << vertices_in_layer.size() << std::endl;
+
+      auto bary = barycenterInLayer(t, layerClusters, vertices_in_layer);
+      std::cout << "baryc " << bary.x() << " " << bary.y() << " " << bary.z() << std::endl;
+
+      double numr = 0.;
+      double denr = 0.;
+      for (auto v : vertices_in_layer) {
+        auto thisLC = layerClusters[t.vertices(v)];
+        Vector coords(thisLC.x(), thisLC.y(), thisLC.z());
+        double wt = thisLC.energy();
+        //auto diff = coords - bary;
+        //auto diff_sq = diff.Dot(diff);
+        double diff_sq = (coords - bary).Mag2();
+        numr += wt*diff_sq;
+        denr += wt;
+        std::cout << numr << " " << denr << std::endl;
+      }
+      double M = (vertices_in_layer.size()-1)/(double)vertices_in_layer.size();
+      double stdDev = pow(numr/(M*denr),0.5);
+      std::cout << "stddev " << stdDev << std::endl;
+
+      stdDev_by_layer_[i] += stdDev;
+    }
+
+
+    // E frac by layer
+    if (t.ticlIteration() == TracksterIterIndex::EM) {
+      for (int i = 0; i < 100; ++i) {
+        auto vertices_in_layer = vertT_by_layer[i];
+        //if (vertices_in_layer.empty()) continue;
+        double e_layer = 0.;
+        for (auto v : vertices_in_layer) e_layer += layerClusters[t.vertices(v)].energy();
+        //e_layer /= maxEnergy;
+        e_layer /= maxElayer_energy;
+        layer_Efrac_TS_EM[i] += e_layer;
+      }
+    }
+    else if (t.ticlIteration() == TracksterIterIndex::HAD) {
+      for (unsigned i = 0; i < 100; ++i) {
+        auto vertices_in_layer = vertT_by_layer[i];
+        //if (vertices_in_layer.empty()) continue;
+        double e_layer = 0.;
+        for (auto v : vertices_in_layer) e_layer += layerClusters[t.vertices(v)].energy();
+        //e_layer /= maxEnergy;
+        e_layer /= maxElayer_energy;
+        layer_Efrac_TS_HAD[i] += e_layer;
+      }
+    }
+  }
+  if (nonZero_trackster > 0)
+  for (int i = 0; i < 100; ++i) {
+    layer_Efrac_TS_EM[i] /= nonZero_trackster;
+    layer_Efrac_TS_HAD[i] /= nonZero_trackster;
+    stdDev_by_layer[i] += (stdDev_by_layer_[i]/nonZero_trackster);
+  }
+
+  // STS
+  nonZero_trackster = 0;
+  std::array<double, 100> layer_Efrac_STS_EM = {};
+  std::array<double, 100> layer_Efrac_STS_HAD = {};
+  for (auto &t : selectedSTS) {
+    unsigned N = t.vertices().size();
+    if (N == 0) continue;
+    ++nonZero_trackster;
+    
+    auto vertices_by_layer = sortByLayer(t, layerClusters, rhtools_);
+
+    std::vector<double> LCenergies;
+    for (unsigned i = 0; i < N; ++i) {
+      LCenergies.push_back(layerClusters[t.vertices(i)].energy());
+    }
+    
+    auto maxE_vert = std::distance(LCenergies.begin(), std::max_element(LCenergies.begin(), LCenergies.end()));
+    auto maxE_layer = rhtools_.getLayerWithOffset(layerClusters[t.vertices(maxE_vert)].hitsAndFractions()[0].first);
+    //h_layerOfLargeE_STS->Fill(maxE_layer);
+    h_layerOfLargeE_STS->Fill(maxE_layer);
+    double maxElayer_energy = 0;
+    for (auto v : vertices_by_layer[maxE_layer]) maxElayer_energy += layerClusters[t.vertices(v)].energy();
+
+    if ((int)maxE_layer <= 7) h_lowEmaxLayer_STS_E->Fill(t.raw_energy());
+
+    if (t.ticlIteration() == TracksterIterIndex::EM) std::cout << "STS-EM" << std::endl;
+
+    auto vertT_by_layer = translateTrackster(t, layerClusters, rhtools_, maxE_layer);
+
+    // E frac by layer
+    if (t.ticlIteration() == TracksterIterIndex::EM) {
+      for (unsigned i = 0; i < 100; ++i) {
+        auto vertices_in_layer = vertT_by_layer[i];
+        //if (vertices_in_layer.empty()) continue;
+        double e_layer = 0.;
+        for (auto v : vertices_in_layer) e_layer += layerClusters[t.vertices(v)].energy();
+        //e_layer /= maxEnergy;
+        e_layer /= maxElayer_energy;
+        layer_Efrac_STS_EM[i] += e_layer;
+      }
+    }
+    else if (t.ticlIteration() == TracksterIterIndex::HAD) {
+      for (unsigned i = 0; i < 100; ++i) {
+        auto vertices_in_layer = vertT_by_layer[i];
+        //if (vertices_in_layer.empty()) continue;
+        double e_layer = 0.;
+        for (auto v : vertices_in_layer) e_layer += layerClusters[t.vertices(v)].energy();
+        //e_layer /= maxEnergy;
+        e_layer /= maxElayer_energy;
+        layer_Efrac_STS_HAD[i] += e_layer;
+      }
+    }
+  }
+  if (nonZero_trackster > 0)
+  for (int i = 0; i < 100; ++i) {
+    layer_Efrac_STS_EM[i] /= nonZero_trackster;
+    layer_Efrac_STS_HAD[i] /= nonZero_trackster;
+  }
+
+  for (int i = 0; i < 100; ++i) {
+    layer_Efrac_mean_TS_EM[i] += layer_Efrac_TS_EM[i];
+    layer_Efrac_mean_TS_HAD[i] += layer_Efrac_TS_HAD[i];
+    layer_Efrac_mean_STS_EM[i] += layer_Efrac_STS_EM[i];
+    layer_Efrac_mean_STS_HAD[i] += layer_Efrac_STS_HAD[i];
+  }
 
   std::vector<int> sorted_tracksters_idx(tracksters.size());
   iota(begin(sorted_tracksters_idx), end(sorted_tracksters_idx), 0);
@@ -865,8 +1245,12 @@ void TiclDebugger::beginJob() {
   // distances
   h_distAll = fs->make<TH1D>("allMinSep", "Trackster-Track closest distance, all", 100, 0., 100.);
   h_distAll->GetXaxis()->SetTitle("cm");
+  h_distTS_notLinked = fs->make<TH1D>("ts_notLinked", "not linked TS-Tk", 50, 0., 10.);
+  h_distTS_notLinked->GetXaxis()->SetTitle("cm");
   h_st_distAll = fs->make<TH1D>("st_allMinSep", "simTrackster-Track closest distance, all", 100, 0., 100.);
   h_st_distAll->GetXaxis()->SetTitle("cm");
+  h_distSTS_notLinked = fs->make<TH1D>("sts_notLinked", "not linked STS-Tk", 100, 0., 40.);
+  h_distSTS_notLinked->GetXaxis()->SetTitle("cm");
   h_distCaloP = fs->make<TH1D>("CaloPMinSep", "Trackster-Track closest distance, only unconverted", 100, 0., 40.);
   h_distCaloP->GetXaxis()->SetTitle("cm");
 
@@ -874,7 +1258,7 @@ void TiclDebugger::beginJob() {
   //h_NTracks->GetXaxis()->SetTitle("#");
   h_NCaloParticles = fs->make<TH1D>("NCaloParticles", "Number of Caloparticles", 40, 0., 10.);
 
-  // effect of errors 
+  // extent of errors 
   h_binDiff_track_eta = fs->make<TH1D>("diff_Track_eta", "Bin difference - eta", 20, 0., 5.);
   h_binDiff_track_phi = fs->make<TH1D>("diff_Track_phi", "Bin difference - phi", 20, 0., 5.);
   h_binDiff_track_global = fs->make<TH1D>("diff_Track_glob", "Bin difference - global", 20, 0., 5.);
@@ -928,9 +1312,46 @@ void TiclDebugger::beginJob() {
   h_st_eff_E->GetXaxis()->SetTitle("Energy [GeV]");
 
   // e_tk dot e_PCA
-  h_theta_tk_STS = fs->make<TH1D>("tk_STS", "#hat{e}_{tk} #bullet #hat{e}_{PCA} - STS", 50, -1.0, 1.0);
-  h_theta_tk_TS = fs->make<TH1D>("tk_TS", "#hat{e}_{tk} #bullet #hat{e}_{PCA} - TS", 50, -1.0, 1.0);
+  h_theta_tk_STS = fs->make<TH1D>("tk_STS", "#hat{e}_{tk} #bullet #hat{e}_{PCA} - STS", 60, .7, 1.0);
+  h_theta_tk_TS = fs->make<TH1D>("tk_TS", "#hat{e}_{tk} #bullet #hat{e}_{PCA} - TS", 60, .7, 1.0);
 
+  // E fraction linked
+  h_EfracLinked_TS = fs->make<TH1D>("Efrac_TS", "E frac linked - TS", 20, 0.0, 1.0);
+  h_EfracLinked_TS->GetXaxis()->SetTitle("E_{TS}^{link}/E_{CP}^{sel}");
+  h_EfracLinked_STS = fs->make<TH1D>("Efrac_STS", "E frac linked - STS", 20, 0.0, 1.0);
+  h_EfracLinked_STS->GetXaxis()->SetTitle("E_{STS}^{link}/E_{CP}^{sel}");
+
+  // E frac in layer
+  h_EfracLayer_TS_EM = fs->make<TH1D>("EfracLayer_TS_EM", "mean energy in layer - TS", 100, 0.5, 100.5);
+  h_EfracLayer_TS_EM->GetXaxis()->SetTitle("layer number");
+  h_EfracLayer_TS_EM->GetYaxis()->SetTitle("frac E in layer wrt max E layer");
+  h_EfracLayer_TS_HAD = fs->make<TH1D>("EfracLayer_TS_HAD", "mean energy in layer - TS", 100, 0.5, 100.5);
+  h_EfracLayer_TS_HAD->GetXaxis()->SetTitle("layer number");
+  h_EfracLayer_TS_HAD->GetYaxis()->SetTitle("frac E in layer wrt max E layer");
+
+  h_EfracLayer_STS_EM = fs->make<TH1D>("EfracLayer_STS_EM", "mean energy in layer - STS", 100, 0.5, 100.5);
+  h_EfracLayer_STS_EM->GetXaxis()->SetTitle("layer number");
+  h_EfracLayer_STS_EM->GetYaxis()->SetTitle("frac E in layer wrt max E layer");
+  h_EfracLayer_STS_HAD = fs->make<TH1D>("EfracLayer_STS_HAD", "mean energy in layer - STS", 100, 0.5, 100.5);
+  h_EfracLayer_STS_HAD->GetXaxis()->SetTitle("layer number");
+  h_EfracLayer_STS_HAD->GetYaxis()->SetTitle("frac E in layer wrt max E layer");
+
+  // layer of max E LC of shower
+  h_layerOfLargeE_TS_EM = fs->make<TH1D>("maxE_layer_TS_sel_EM", "max E LC layer", 50, 0.5, 50.5);
+  h_layerOfLargeE_TS_EM->GetXaxis()->SetTitle("layer number");
+  h_layerOfLargeE_TS_HAD = fs->make<TH1D>("maxE_layer_TS_sel_HAD", "max E LC layer", 50, 0.5, 50.5);
+  h_layerOfLargeE_TS_HAD->GetXaxis()->SetTitle("layer number");
+  h_layerOfLargeE_STS = fs->make<TH1D>("maxE_layer_STS_onlyCP", "max E LC layer", 50, 0.5, 50.5);
+  h_layerOfLargeE_STS->GetXaxis()->SetTitle("layer number");
+
+  h_lowEmaxLayer_STS_E = fs->make<TH1D>("lowEmaxLayer", "STS with max E LC layer <= 7", 50, 0, 50);
+  h_lowEmaxLayer_STS_E->GetXaxis()->SetTitle("Energy [GeV]");
+
+  h_stdDevLayer_TS = fs->make<TH1D>("stdDevLayer_TS", "", 100, 0.5, 100.5);
+  h_stdDevLayer_TS->GetYaxis()->SetTitle("E weighted std dev of LCs/layer");
+  h_stdDevLayer_TS->GetXaxis()->SetTitle("layer number (max E layer -> 50)");
+
+  stack_1 = fs->make<THStack>("s1", "stack 1"); 
 }
 
 void TiclDebugger::endJob() {
@@ -939,10 +1360,16 @@ void TiclDebugger::endJob() {
   std::cout << "Total number of Tracksters propagated = " << totTrackstersPropagated << std::endl;
   std::cout << "Total number of simTracksters = " << totsimTracksters << std::endl;
   std::cout << "Total number of simTracksters propagated = " << totsimTrackstersPropagated << std::endl;
+  std::cout << "TS linking - glob efficiency = " << totTrackstersLinked/(double)totTrackstersPropagated << std::endl;
+  std::cout << "STS linking - glob efficiency = " << totsimTrackstersLinked/(double)totsimTrackstersPropagated << std::endl;
+  std::cout << "Number of simTrackster handles not valid = " << NsimTS_notValid << std::endl;
   std::cout << "sim TS from CP = " << totsimTSfromCP << std::endl;
   std::cout << "Number of tsos not valid = " << Ntsos_notvalid << std::endl;
   std::cout << "tracks not satisfying cutTk = " << noTracks << std::endl;
   std::cout << "Total no. of SimTracks crossed boundary = " << NSimTracksCrossedBoundary << std::endl;
+  std::cout << "Bad events (PCA) : ";
+  for (auto i : badPCAs) std::cout << i << " ";
+  std::cout << std::endl;
 
   h_eff_eta->Divide(h_tksters_linked_eta,h_tksters_tot_eta);
   h_eff_phi->Divide(h_tksters_tot_phi);
@@ -953,6 +1380,27 @@ void TiclDebugger::endJob() {
   h_st_eff_phi->Divide(h_stksters_tot_phi);
   h_st_eff_pT->Divide(h_stksters_tot_pT);
   h_st_eff_E->Divide(h_stksters_tot_E);
+
+  for (int i = 0; i < 100; ++i) {
+    layer_Efrac_mean_TS_EM[i] /= NEvent;
+    layer_Efrac_mean_TS_HAD[i] /= NEvent;
+    layer_Efrac_mean_STS_EM[i] /= NEvent;
+    layer_Efrac_mean_STS_HAD[i] /= NEvent;
+    stdDev_by_layer[i] /= NEvent;
+    std::cout << stdDev_by_layer[i] << " ";
+  }
+
+  for (int i = 1; i <= 100; ++i) {
+    h_EfracLayer_TS_EM->SetBinContent(i, layer_Efrac_mean_TS_EM[i-1]);
+    h_EfracLayer_TS_HAD->SetBinContent(i, layer_Efrac_mean_TS_HAD[i-1]);
+    h_EfracLayer_STS_EM->SetBinContent(i, layer_Efrac_mean_STS_EM[i-1]);
+    h_EfracLayer_STS_HAD->SetBinContent(i, layer_Efrac_mean_STS_HAD[i-1]);
+    h_stdDevLayer_TS->SetBinContent(i, stdDev_by_layer[i-1]);
+  }
+  stack_1->Add(h_EfracLayer_TS_EM);
+  stack_1->Add(h_EfracLayer_TS_HAD);
+  stack_1->Add(h_EfracLayer_STS_EM);
+  stack_1->Add(h_EfracLayer_STS_HAD);
 }
 
 // ------------ method fills 'descriptions' with the allowed parameters for the module  ------------
