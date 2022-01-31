@@ -4,6 +4,7 @@
 #include "FWCore/Framework/interface/stream/EDProducer.h"
 #include "FWCore/ParameterSet/interface/ParameterSet.h"
 #include "FWCore/ParameterSet/interface/ConfigurationDescriptions.h"
+#include "FWCore/ParameterSet/interface/PluginDescription.h"
 #include "FWCore/MessageLogger/interface/MessageLogger.h"
 #include "FWCore/Utilities/interface/ESGetToken.h"
 #include "FWCore/Framework/interface/ESHandle.h"
@@ -23,9 +24,13 @@
 #include "DataFormats/TrackReco/interface/TrackFwd.h"
 #include "DataFormats/Math/interface/Vector3D.h"
 
-#include "RecoLocalCalo/HGCalRecAlgos/interface/RecHitTools.h"
 #include "RecoHGCal/TICL/interface/GlobalCache.h"
 #include "RecoHGCal/TICL/plugins/SeedingRegionAlgoBase.h"
+#include "RecoHGCal/TICL/plugins/LinkingAlgoBase.h"
+#include "RecoHGCal/TICL/plugins/LinkingAlgoFactory.h"
+#include "RecoHGCal/TICL/plugins/LinkingAlgoByPCAGeometric.h"
+
+#include "RecoLocalCalo/HGCalRecAlgos/interface/RecHitTools.h"
 #include "PhysicsTools/TensorFlow/interface/TensorFlow.h"
 #include "CommonTools/Utils/interface/StringCutObjectSelector.h"
 
@@ -48,6 +53,7 @@
 
 #include "TrackstersPCA.h"
 #include "SeedingRegionByTracks.h"
+#include "DataFormats/HGCalReco/interface/SuperTrackster.h"
 
 using namespace ticl;
 
@@ -65,6 +71,8 @@ public:
   void beginJob();
   void endJob();
 
+  void beginRun(edm::Run const& iEvent, edm::EventSetup const& es) override;
+
 private:
   typedef ticl::Trackster::IterationIndex TracksterIterIndex;
   typedef math::XYZVector Vector;
@@ -76,8 +84,10 @@ private:
   void assignTimeToCandidates(std::vector<TICLCandidate> &resultCandidates) const;
   void dumpTrackster(const Trackster &) const;
 
-  void linkTracksters(const edm::Event &, const edm::EventSetup &, std::vector<Trackster> &);
-  void buildFirstLayers();
+  //void linkTracksters(const edm::Event &, const edm::EventSetup &, std::vector<Trackster> &);
+  //void buildFirstLayers();
+
+  std::unique_ptr<LinkingAlgoBase> linkingAlgo_;
 
   const edm::EDGetTokenT<std::vector<Trackster>> tracksterstrkem_token_;
   const edm::EDGetTokenT<std::vector<Trackster>> trackstersem_token_;
@@ -189,15 +199,24 @@ TrackstersMergeProducer::TrackstersMergeProducer(const edm::ParameterSet &ps, co
 
   produces<std::vector<Trackster>>();
   produces<std::vector<TICLCandidate>>();
+  produces<std::vector<SuperTrackster>>();
   std::string detectorName_ = (detector_ == "HFNose") ? "HGCalHFNoseSensitive" : "HGCalEESensitive";
   //std::string detectorName_ = "HGCalEESensitive";
   hdc_token_ = esConsumes<HGCalDDDConstants, IdealGeometryRecord>(
     edm::ESInputTag("",detectorName_));
+
+  auto sumes = consumesCollector();
+  auto linkingPSet = ps.getParameter<edm::ParameterSet>("linkingPSet");
+  auto algoType = linkingPSet.getParameter<std::string>("type");
+  linkingAlgo_ = LinkingAlgoFactory::get()->create(algoType, linkingPSet, sumes);
+
 }
 
 void TrackstersMergeProducer::beginJob() {}
 
 void TrackstersMergeProducer::endJob() {};
+
+void TrackstersMergeProducer::beginRun(edm::Run const& iEvent, edm::EventSetup const& es) { linkingAlgo_->initialize(es); };
 
 void TrackstersMergeProducer::fillTile(TICLTracksterTiles &tracksterTile,
                                        const std::vector<Trackster> &tracksters,
@@ -236,7 +255,7 @@ void TrackstersMergeProducer::dumpTrackster(const Trackster &t) const {
   LogDebug("TrackstersMergeProducer") << std::endl;
 }
 
-void TrackstersMergeProducer::buildFirstLayers() {
+/*void TrackstersMergeProducer::buildFirstLayers() {
   float zVal = hgcons_->waferZ(1, true);
   std::pair<double, double> rMinMax = hgcons_->rangeR(zVal, true);
 
@@ -248,9 +267,9 @@ void TrackstersMergeProducer::buildFirstLayers() {
                                               SimpleDiskBounds(rMinMax.first, rMinMax.second, zSide - 0.5, zSide + 0.5))
                                       .get());
   }
-}
+}*/
 
-void TrackstersMergeProducer::linkTracksters(const edm::Event &evt, const edm::EventSetup &es, std::vector<Trackster> &tracksters) {
+/*void TrackstersMergeProducer::linkTracksters(const edm::Event &evt, const edm::EventSetup &es, std::vector<Trackster> &tracksters) {
   edm::ESHandle<HGCalDDDConstants> hdc  = es.getHandle(hdc_token_);
   edm::ESHandle<MagneticField> bfield = es.getHandle(bfield_token_);
   edm::ESHandle<Propagator> propagator = es.getHandle(propagator_token_);
@@ -337,7 +356,7 @@ void TrackstersMergeProducer::linkTracksters(const edm::Event &evt, const edm::E
     std::cout << i;
   }
   std::cout << std::endl;
-}
+}*/
 
 void TrackstersMergeProducer::produce(edm::Event &evt, const edm::EventSetup &es) {
   edm::ESHandle<CaloGeometry> geom = es.getHandle(geometry_token_);
@@ -449,7 +468,11 @@ void TrackstersMergeProducer::produce(edm::Event &evt, const edm::EventSetup &es
   printTrackstersDebug(*resultTrackstersMerged, "TrackstersMergeProducer");
 
   // Linking
-  linkTracksters(evt, es, *resultTrackstersMerged);
+  //linkTracksters(evt, es, *resultTrackstersMerged);
+
+  auto resultTrackstersLinked = std::make_unique<std::vector<SuperTrackster>>();
+  linkingAlgo_->linkTracksters(evt, es, *resultTrackstersMerged, *resultTrackstersLinked);
+  evt.put(std::move(resultTrackstersLinked));
 
   auto trackstersMergedHandle = evt.put(std::move(resultTrackstersMerged));
 
@@ -937,6 +960,11 @@ void TrackstersMergeProducer::printTrackstersDebug(const std::vector<Trackster> 
 
 void TrackstersMergeProducer::fillDescriptions(edm::ConfigurationDescriptions &descriptions) {
   edm::ParameterSetDescription desc;
+
+  edm::ParameterSetDescription linkingDesc;
+  linkingDesc.addNode(edm::PluginDescription<LinkingAlgoFactory>("type", "LinkingAlgoByPCAGeometric", true));
+  desc.add<edm::ParameterSetDescription>("linkingPSet", linkingDesc);
+
   desc.add<edm::InputTag>("tracksterstrkem", edm::InputTag("ticlTrackstersTrkEM"));
   desc.add<edm::InputTag>("trackstersem", edm::InputTag("ticlTrackstersEM"));
   desc.add<edm::InputTag>("tracksterstrk", edm::InputTag("ticlTrackstersTrk"));
