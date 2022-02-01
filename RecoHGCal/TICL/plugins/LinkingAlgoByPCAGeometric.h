@@ -14,15 +14,11 @@
 
 #include "DataFormats/CaloRecHit/interface/CaloCluster.h"
 #include "DataFormats/ForwardDetId/interface/HGCalDetId.h"
-#include "DataFormats/TrackReco/interface/Track.h"
-#include "DataFormats/TrackReco/interface/TrackFwd.h"
+
 #include "DataFormats/Math/interface/Vector3D.h"
 #include "DataFormats/GeometrySurface/interface/BoundDisk.h"
 
 #include "RecoLocalCalo/HGCalRecAlgos/interface/RecHitTools.h"
-#include "SimDataFormats/CaloAnalysis/interface/CaloParticle.h"
-
-#include "CommonTools/Utils/interface/StringCutObjectSelector.h"
 
 #include "TrackingTools/GeomPropagators/interface/Propagator.h"
 #include "TrackingTools/Records/interface/TrackingComponentsRecord.h"
@@ -47,7 +43,12 @@ namespace ticl {
 
 		void linkTracksters(const edm::Event &, 
                         const edm::EventSetup &,
-                        std::vector<Trackster> &,
+                        const std::vector<reco::Track> &,
+                        const StringCutObjectSelector<reco::Track>,
+                        const std::vector<CaloParticle> &,
+                        const std::vector<Trackster> &,
+                        const std::vector<Trackster> &,
+                        std::vector<SuperTrackster> &,
                         std::vector<SuperTrackster> &) override;
 
 		static void fillPSetDescription(edm::ParameterSetDescription& desc);
@@ -65,16 +66,10 @@ namespace ticl {
     const std::string detector_;
     const std::string propName_;
     const edm::ESGetToken<Propagator, TrackingComponentsRecord> propagatorToken_;
-		//const edm::EDGetTokenT<std::vector<ticl::Trackster>> trackstersMergeToken_;
-		const edm::EDGetTokenT<std::vector<ticl::Trackster>> simTSToken_;
-		const edm::EDGetTokenT<reco::TrackCollection> trackColToken_;
-		const edm::EDGetTokenT<std::vector<CaloParticle>> caloParticlesToken_;
-		const edm::EDGetTokenT<std::vector<reco::CaloCluster>> layerClustersToken_;
-
+		
     std::once_flag initializeGeometry_;
 
     const HGCalDDDConstants* hgcons_;
-    const StringCutObjectSelector<reco::Track> cutTk_;
 
     std::unique_ptr<GeomDet> firstDisk_[2];
 
