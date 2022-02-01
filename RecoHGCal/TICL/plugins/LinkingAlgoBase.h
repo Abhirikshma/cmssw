@@ -15,6 +15,10 @@
 #include "DataFormats/TrackReco/interface/Track.h"
 #include "DataFormats/TrackReco/interface/TrackFwd.h"
 #include "CommonTools/Utils/interface/StringCutObjectSelector.h"
+#include "MagneticField/Engine/interface/MagneticField.h"
+#include "TrackingTools/GeomPropagators/interface/Propagator.h"
+#include "RecoLocalCalo/HGCalRecAlgos/interface/RecHitTools.h"
+#include "Geometry/HGCalCommonData/interface/HGCalDDDConstants.h"
 
 namespace edm {
   class Event;
@@ -24,24 +28,24 @@ namespace edm {
 namespace ticl {
   class LinkingAlgoBase {
   public:
-    LinkingAlgoBase(const edm::ParameterSet& conf, edm::ConsumesCollector& sumes) {}
-    
+    LinkingAlgoBase(const edm::ParameterSet& conf) {}
+
     virtual ~LinkingAlgoBase(){};
 
-    virtual void initialize(const edm::EventSetup& es) = 0;
+    virtual void initialize(const HGCalDDDConstants* hgcons,
+                            const hgcal::RecHitTools rhtools,
+                            const edm::ESHandle<MagneticField> bfieldH,
+                            const edm::ESHandle<Propagator> propH) = 0;
 
-    virtual void linkTracksters(const edm::Event& evt,
-                                const edm::EventSetup& es,
-                                const std::vector<reco::Track>& tracks,
+    virtual void linkTracksters(const std::vector<reco::Track>& tracks,
                                 const StringCutObjectSelector<reco::Track> cutTk,
                                 const std::vector<CaloParticle>& caloParticles,
-                                const std::vector<Trackster> &tracksters,
-                                const std::vector<Trackster> &simTracksters,
+                                const std::vector<Trackster>& tracksters,
+                                const std::vector<Trackster>& simTracksters,
                                 std::vector<SuperTrackster>& resultTracksters,
                                 std::vector<SuperTrackster>& resultSimTracksters) = 0;
 
-    static void fillPSetDescription(edm::ParameterSetDescription& desc) {};
-
+    static void fillPSetDescription(edm::ParameterSetDescription& desc){};
   };
 }  // namespace ticl
 

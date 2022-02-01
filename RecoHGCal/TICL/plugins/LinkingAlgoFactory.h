@@ -5,7 +5,6 @@
 #include "FWCore/PluginManager/interface/PluginFactory.h"
 #include "LinkingAlgoBase.h"
 
-using LinkingAlgoFactory =
-    edmplugin::PluginFactory<ticl::LinkingAlgoBase*(const edm::ParameterSet&, edm::ConsumesCollector&)>;
+using LinkingAlgoFactory = edmplugin::PluginFactory<ticl::LinkingAlgoBase*(const edm::ParameterSet&)>;
 
 #endif
