@@ -10,33 +10,23 @@
 
 using namespace ticl;
 
-LinkingAlgoByPCAGeometric::LinkingAlgoByPCAGeometric(const edm::ParameterSet &conf, edm::ConsumesCollector &sumes)
-    : LinkingAlgoBase(conf, sumes),
-      caloGeometryToken_(sumes.esConsumes<CaloGeometry, CaloGeometryRecord, edm::Transition::BeginRun>()),
-      bfieldToken_(sumes.esConsumes<MagneticField, IdealMagneticFieldRecord, edm::Transition::BeginRun>()),
-      detector_(conf.getParameter<std::string>("detector")),
-      propName_(conf.getParameter<std::string>("propagator")),
-      propagatorToken_(sumes.esConsumes<Propagator, TrackingComponentsRecord, edm::Transition::BeginRun>(
-        edm::ESInputTag("", propName_))) {
-        std::string detectorName_ = (detector_ == "HFNose") ? "HGCalHFNoseSensitive" : "HGCalEESensitive";
-        hdcToken_ = sumes.esConsumes<HGCalDDDConstants, IdealGeometryRecord, edm::Transition::BeginRun>(
-          edm::ESInputTag("", detectorName_));
-      }
+LinkingAlgoByPCAGeometric::LinkingAlgoByPCAGeometric(const edm::ParameterSet &conf) : LinkingAlgoBase(conf) {}
 
 LinkingAlgoByPCAGeometric::~LinkingAlgoByPCAGeometric() {}
 
-void LinkingAlgoByPCAGeometric::initialize(const edm::EventSetup &es) {
-  edm::ESHandle<HGCalDDDConstants> hdc = es.getHandle(hdcToken_);
-  hgcons_ = hdc.product();
+void LinkingAlgoByPCAGeometric::initialize(const HGCalDDDConstants *hgcons,
+                                           const hgcal::RecHitTools rhtools,
+                                           const edm::ESHandle<MagneticField> bfieldH,
+                                           const edm::ESHandle<Propagator> propH) {
+  hgcons_ = hgcons;
 
   buildFirstLayers();
 
-  const CaloGeometry& geom = es.getData(caloGeometryToken_);
-  rhtools_.setGeometry(geom);
+  rhtools_ = rhtools;
 
   //bFieldProd = &es.getData(bfieldToken_);
-  bfield_ = es.getHandle(bfieldToken_);
-  propagator_ = es.getHandle(propagatorToken_);
+  bfield_ = bfieldH;
+  propagator_ = propH;
 }
 
 void LinkingAlgoByPCAGeometric::buildFirstLayers() {
@@ -53,59 +43,53 @@ void LinkingAlgoByPCAGeometric::buildFirstLayers() {
   }
 }
 
-void LinkingAlgoByPCAGeometric::linkTracksters(const edm::Event &evt,
-                                               const edm::EventSetup &es,
-                                               const std::vector<reco::Track> &tracks,
+void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &tracks,
                                                const StringCutObjectSelector<reco::Track> cutTk,
                                                const std::vector<CaloParticle> &caloParticles,
                                                const std::vector<Trackster> &tracksters,
                                                const std::vector<Trackster> &simTracksters,
                                                std::vector<SuperTrackster> &resultTracksters,
                                                std::vector<SuperTrackster> &resultSimTracksters) {
-  
-  const double simTracksterEnergyCut = 0.; // S/TS < this frac of CP energy not selected
+  const double simTracksterEnergyCut = 0.;  // S/TS < this frac of CP energy not selected
   const double tracksterEnergyCut = 0.;
-  const double delta_search = 0.02; // search box delta in eta-phi
+  const double delta_search = 0.02;  // search box delta in eta-phi
 
-  
   auto bFieldProd = bfield_.product();
   const Propagator &prop = (*propagator_);
-  
+
   buildFirstLayers();
 
-
   // propagated point collections
-  std::vector<std::pair<std::pair<Vector,Vector>, int>> trackPcol; // propagated track points, errors and index of track in collection
-  std::vector<std::pair<Vector, int>> tracksterPcol; // same but for Tracksters, errors not included here yet
-  std::vector<std::pair<Vector, int>> simtracksterPcol; // simTracksters
+  std::vector<std::pair<std::pair<Vector, Vector>, int>>
+      trackPcol;  // propagated track points, errors and index of track in collection
+  std::vector<std::pair<Vector, int>> tracksterPcol;     // same but for Tracksters, errors not included here yet
+  std::vector<std::pair<Vector, int>> simtracksterPcol;  // simTracksters
 
   // tiles
-  ticl::TICLLayerTile tracksterProp_tile_fw;
-  ticl::TICLLayerTile tracksterProp_tile_bw;
-  ticl::TICLLayerTile simtracksterProp_tile_fw;
-  ticl::TICLLayerTile simtracksterProp_tile_bw;
-  ticl::TICLLayerTile trackProp_tile_fw;
-  ticl::TICLLayerTile trackProp_tile_bw;
+  TICLLayerTile tracksterProp_tile_fw;
+  TICLLayerTile tracksterProp_tile_bw;
+  TICLLayerTile simtracksterProp_tile_fw;
+  TICLLayerTile simtracksterProp_tile_bw;
+  TICLLayerTile trackProp_tile_fw;
+  TICLLayerTile trackProp_tile_bw;
 
   bool singleSC_zplus = false;
   bool singleSC_zminus = false;
 
-  double CP_zlpusE = 0.; // Energy cuts on S/TS as frac of CP energy
+  double CP_zlpusE = 0.;  // Energy cuts on S/TS as frac of CP energy
   double CP_zminusE = 0.;
 
   for (auto const &cp : caloParticles) {
-
     if (cp.g4Tracks()[0].crossedBoundary()) {
       if (cp.g4Tracks()[0].getPositionAtBoundary().Z() > 0) {
         singleSC_zplus = true;
         CP_zlpusE = cp.energy();
-      }
-      else if (cp.g4Tracks()[0].getPositionAtBoundary().Z() < 0) {
+      } else if (cp.g4Tracks()[0].getPositionAtBoundary().Z() < 0) {
         singleSC_zminus = true;
         CP_zminusE = cp.energy();
       }
     }
-  } // CP
+  }  // CP
 
   // Propagate tracks to the HGCal front
   for (unsigned i = 0; i < tracks.size(); ++i) {
@@ -117,7 +101,7 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const edm::Event &evt,
     FreeTrajectoryState fts = trajectoryStateTransform::outerFreeState((tk), bFieldProd);
     int iSide = int(tk.eta() > 0);
     TrajectoryStateOnSurface tsos = prop.propagate(fts, firstDisk_[iSide]->surface());
-    
+
     if (tsos.isValid()) {
       Vector trackP(tsos.globalPosition().x(), tsos.globalPosition().y(), tsos.globalPosition().z());
       Vector tkP_momentum(tsos.globalMomentum().x(), tsos.globalMomentum().y(), tsos.globalMomentum().z());
@@ -125,15 +109,14 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const edm::Event &evt,
       double y_err = pow(tsos.localError().positionError().yy(), 0.5);
       Vector track_err(x_err, y_err, 0.0);
 
-      trackPcol.push_back(std::make_pair(std::make_pair(trackP,track_err), i));
-      
+      trackPcol.push_back(std::make_pair(std::make_pair(trackP, track_err), i));
 
-      if (trackP.Eta() > 0 && singleSC_zplus) 
-      trackProp_tile_fw.fill(trackP.Eta(), trackP.Phi(), i);
+      if (trackP.Eta() > 0 && singleSC_zplus)
+        trackProp_tile_fw.fill(trackP.Eta(), trackP.Phi(), i);
 
       else if (trackP.Eta() < 0 && singleSC_zminus)
-      trackProp_tile_bw.fill(trackP.Eta(), trackP.Phi(), i);
-    }  
+        trackProp_tile_bw.fill(trackP.Eta(), trackP.Phi(), i);
+    }
   }
 
   // Propagate simTracksters
@@ -145,88 +128,89 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const edm::Event &evt,
     Vector baryc = st.barycenter();
     Vector directnv = st.eigenvectors(0);
 
-    if (abs(directnv.Z()) < 0.00001) continue;
+    if (abs(directnv.Z()) < 0.00001)
+      continue;
 
     bool zplus_reject = true;
     bool zminus_reject = true;
 
     if (baryc.Z() > 0 && singleSC_zplus) {
-      if (st.raw_energy() > simTracksterEnergyCut*CP_zlpusE)
-      zplus_reject = false;
+      if (st.raw_energy() > simTracksterEnergyCut * CP_zlpusE)
+        zplus_reject = false;
     }
 
     else if (baryc.Z() < 0 && singleSC_zminus) {
-      if (st.raw_energy() > simTracksterEnergyCut*CP_zminusE)
-      zminus_reject = false;
+      if (st.raw_energy() > simTracksterEnergyCut * CP_zminusE)
+        zminus_reject = false;
     }
 
     if (!(zplus_reject && zminus_reject)) {
       float zVal = hgcons_->waferZ(1, true);
       zVal *= (baryc.Z() > 0) ? 1 : -1;
-      
-      double par = (zVal - baryc.Z())/directnv.Z();
 
-      double xOnSurface = par*directnv.X() + baryc.X();
-      double yOnSurface = par*directnv.Y() + baryc.Y();
+      double par = (zVal - baryc.Z()) / directnv.Z();
+
+      double xOnSurface = par * directnv.X() + baryc.X();
+      double yOnSurface = par * directnv.Y() + baryc.Y();
 
       Vector simtracksterP(xOnSurface, yOnSurface, zVal);
       selectedSTS_idx.push_back(i);
       simtracksterPcol.push_back(std::make_pair(simtracksterP, i));
 
       if (simtracksterP.Eta() > 0)
-      simtracksterProp_tile_fw.fill(simtracksterP.Eta(), simtracksterP.Phi(), i);
+        simtracksterProp_tile_fw.fill(simtracksterP.Eta(), simtracksterP.Phi(), i);
 
       else if (simtracksterP.Eta() < 0)
-      simtracksterProp_tile_bw.fill(simtracksterP.Eta(), simtracksterP.Phi(), i);
+        simtracksterProp_tile_bw.fill(simtracksterP.Eta(), simtracksterP.Phi(), i);
     }
 
-  } // STS
+  }  // STS
 
-  // Propagate tracksters 
+  // Propagate tracksters
   std::vector<unsigned> selectedTS_idx;
   for (unsigned i = 0; i < tracksters.size(); ++i) {
     const auto &t = tracksters[i];
-    
+
     Vector baryc = t.barycenter();
     Vector directnv = t.eigenvectors(0);
-    Vector trackster_err(pow(t.sigmas()[0],0.5), pow(t.sigmas()[1], 0.5), 0.0);
+    Vector trackster_err(pow(t.sigmas()[0], 0.5), pow(t.sigmas()[1], 0.5), 0.0);
 
     bool zplus_reject = true;
     bool zminus_reject = true;
 
     if (baryc.Z() > 0 && singleSC_zplus) {
-      if (t.raw_energy() > tracksterEnergyCut*CP_zlpusE)
-      zplus_reject = false;
+      if (t.raw_energy() > tracksterEnergyCut * CP_zlpusE)
+        zplus_reject = false;
     }
 
     else if (baryc.Z() < 0 && singleSC_zminus) {
-      if (t.raw_energy() > tracksterEnergyCut*CP_zminusE)
-      zminus_reject = false;
+      if (t.raw_energy() > tracksterEnergyCut * CP_zminusE)
+        zminus_reject = false;
     }
-    
+
     if (!(zplus_reject && zminus_reject)) {
       float zVal = hgcons_->waferZ(1, true);
       zVal *= (baryc.Z() > 0) ? 1 : -1;
 
-      double par = (zVal - baryc.Z())/directnv.Z();
+      double par = (zVal - baryc.Z()) / directnv.Z();
 
-      double xOnSurface = par*directnv.X() + baryc.X();
-      double yOnSurface = par*directnv.Y() + baryc.Y();
+      double xOnSurface = par * directnv.X() + baryc.X();
+      double yOnSurface = par * directnv.Y() + baryc.Y();
 
       Vector tracksterP(xOnSurface, yOnSurface, zVal);
       selectedTS_idx.push_back(i);
       tracksterPcol.push_back(std::make_pair(tracksterP, i));
 
-      if (tracksterP.Eta() > 0) 
-      tracksterProp_tile_fw.fill(tracksterP.Eta(), tracksterP.Phi(), i);
+      if (tracksterP.Eta() > 0)
+        tracksterProp_tile_fw.fill(tracksterP.Eta(), tracksterP.Phi(), i);
 
       else if (tracksterP.Eta() < 0)
-      tracksterProp_tile_bw.fill(tracksterP.Eta(), tracksterP.Phi(), i);
+        tracksterProp_tile_bw.fill(tracksterP.Eta(), tracksterP.Phi(), i);
     }
-  } // TS
+  }  // TS
 
   // Search box over tiles + preliminary linking
-  std::vector<unsigned> tracksters_near[trackPcol.size()]; // i-th: indices of tracksters 'linked' to track i
+  std::vector<unsigned> tracksters_near[trackPcol.size()];  // i-th: indices of tracksters 'linked' to track i
   std::vector<unsigned> simtracksters_near[trackPcol.size()];
   int nth = 0;
   for (auto i : trackPcol) {
@@ -239,9 +223,10 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const edm::Event &evt,
     double delta = delta_search;
 
     if (tk_eta > 0) {
-      double eta_min = ((tk_eta - delta) > 0) ? (tk_eta - delta):0;
+      double eta_min = ((tk_eta - delta) > 0) ? (tk_eta - delta) : 0;
 
-      std::array<int, 4> search_box = tracksterProp_tile_fw.searchBoxEtaPhi(eta_min, tk_eta + delta, tk_phi - delta, tk_phi + delta);
+      std::array<int, 4> search_box =
+          tracksterProp_tile_fw.searchBoxEtaPhi(eta_min, tk_eta + delta, tk_phi - delta, tk_phi + delta);
       if (search_box[2] > search_box[3]) {
         double temp = search_box[3];
         search_box[3] = search_box[2];
@@ -250,12 +235,14 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const edm::Event &evt,
 
       for (int eta_i = search_box[0]; eta_i <= search_box[1]; ++eta_i) {
         for (int phi_i = search_box[2]; phi_i <= search_box[3]; ++phi_i) {
-          auto tracksters_in_box = tracksterProp_tile_fw[tracksterProp_tile_fw.globalBin(eta_i,phi_i)]; 
-          tracksters_near[nth].insert(std::end(tracksters_near[nth]), std::begin(tracksters_in_box), std::end(tracksters_in_box));
+          auto tracksters_in_box = tracksterProp_tile_fw[tracksterProp_tile_fw.globalBin(eta_i, phi_i)];
+          tracksters_near[nth].insert(
+              std::end(tracksters_near[nth]), std::begin(tracksters_in_box), std::end(tracksters_in_box));
         }
-      } // TS
+      }  // TS
 
-      std::array<int, 4> search_box_st = simtracksterProp_tile_fw.searchBoxEtaPhi(eta_min, tk_eta + delta, tk_phi - delta, tk_phi + delta);
+      std::array<int, 4> search_box_st =
+          simtracksterProp_tile_fw.searchBoxEtaPhi(eta_min, tk_eta + delta, tk_phi - delta, tk_phi + delta);
       if (search_box_st[2] > search_box_st[3]) {
         double temp = search_box_st[3];
         search_box_st[3] = search_box_st[2];
@@ -264,17 +251,18 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const edm::Event &evt,
 
       for (int eta_i = search_box_st[0]; eta_i <= search_box_st[1]; ++eta_i) {
         for (int phi_i = search_box_st[2]; phi_i <= search_box_st[3]; ++phi_i) {
-          auto simtracksters_in_box = simtracksterProp_tile_fw[simtracksterProp_tile_fw.globalBin(eta_i,phi_i)]; 
-          simtracksters_near[nth].insert(std::end(simtracksters_near[nth]), std::begin(simtracksters_in_box), std::end(simtracksters_in_box));
+          auto simtracksters_in_box = simtracksterProp_tile_fw[simtracksterProp_tile_fw.globalBin(eta_i, phi_i)];
+          simtracksters_near[nth].insert(
+              std::end(simtracksters_near[nth]), std::begin(simtracksters_in_box), std::end(simtracksters_in_box));
         }
-      } // STS
-    } // forward
+      }  // STS
+    }    // forward
 
     if (tk_eta < 0) {
+      double eta_min = ((abs(tk_eta) - delta) > 0) ? (abs(tk_eta) - delta) : 0;
 
-      double eta_min = ((abs(tk_eta) - delta) > 0) ? (abs(tk_eta) - delta):0;
-
-      std::array<int, 4> search_box = tracksterProp_tile_bw.searchBoxEtaPhi(eta_min, abs(tk_eta) + delta, tk_phi - delta, tk_phi + delta);
+      std::array<int, 4> search_box =
+          tracksterProp_tile_bw.searchBoxEtaPhi(eta_min, abs(tk_eta) + delta, tk_phi - delta, tk_phi + delta);
       if (search_box[2] > search_box[3]) {
         double temp = search_box[3];
         search_box[3] = search_box[2];
@@ -283,12 +271,14 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const edm::Event &evt,
 
       for (int eta_i = search_box[0]; eta_i <= search_box[1]; ++eta_i) {
         for (int phi_i = search_box[2]; phi_i <= search_box[3]; ++phi_i) {
-          auto tracksters_in_box = tracksterProp_tile_bw[tracksterProp_tile_bw.globalBin(eta_i,phi_i)]; 
-          tracksters_near[nth].insert(std::end(tracksters_near[nth]), std::begin(tracksters_in_box), std::end(tracksters_in_box));
+          auto tracksters_in_box = tracksterProp_tile_bw[tracksterProp_tile_bw.globalBin(eta_i, phi_i)];
+          tracksters_near[nth].insert(
+              std::end(tracksters_near[nth]), std::begin(tracksters_in_box), std::end(tracksters_in_box));
         }
-      } // TS
+      }  // TS
 
-      std::array<int, 4> search_box_st = simtracksterProp_tile_bw.searchBoxEtaPhi(eta_min, abs(tk_eta) + delta, tk_phi - delta, tk_phi + delta);
+      std::array<int, 4> search_box_st =
+          simtracksterProp_tile_bw.searchBoxEtaPhi(eta_min, abs(tk_eta) + delta, tk_phi - delta, tk_phi + delta);
       if (search_box_st[2] > search_box_st[3]) {
         double temp = search_box_st[3];
         search_box_st[3] = search_box_st[2];
@@ -297,14 +287,15 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const edm::Event &evt,
 
       for (int eta_i = search_box_st[0]; eta_i <= search_box_st[1]; ++eta_i) {
         for (int phi_i = search_box_st[2]; phi_i <= search_box_st[3]; ++phi_i) {
-          auto simtracksters_in_box = simtracksterProp_tile_bw[simtracksterProp_tile_bw.globalBin(eta_i,phi_i)]; 
-          simtracksters_near[nth].insert(std::end(simtracksters_near[nth]), std::begin(simtracksters_in_box), std::end(simtracksters_in_box));
+          auto simtracksters_in_box = simtracksterProp_tile_bw[simtracksterProp_tile_bw.globalBin(eta_i, phi_i)];
+          simtracksters_near[nth].insert(
+              std::end(simtracksters_near[nth]), std::begin(simtracksters_in_box), std::end(simtracksters_in_box));
         }
-      } // STS
-    } // backward
+      }  // STS
+    }    // backward
 
     ++nth;
-  } // propagated tracks
+  }  // propagated tracks
 
   for (unsigned i = 0; i < trackPcol.size(); ++i) {
     auto const trackstersLinked = tracksters_near[i];
@@ -317,13 +308,8 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const edm::Event &evt,
     resultSimTracksters.push_back(resultSTS);
   }
 
-} // linkTracksters
+}  // linkTracksters
 
-void LinkingAlgoByPCAGeometric::fillPSetDescription(edm::ParameterSetDescription& desc) {
-  desc.add<std::string>("detector","HGCAL");
-  desc.add<std::string>("propagator","PropagatorWithMaterial");
-  desc.add<std::string>("cutTk",
-                        "1.48 < abs(eta) < 3.0 && pt > 1. && quality(\"highPurity\") && "
-                        "hitPattern().numberOfLostHits(\"MISSING_OUTER_HITS\") < 5");
+void LinkingAlgoByPCAGeometric::fillPSetDescription(edm::ParameterSetDescription &desc) {
   LinkingAlgoBase::fillPSetDescription(desc);
 }
