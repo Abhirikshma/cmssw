@@ -11,6 +11,10 @@
 #include "FWCore/Framework/interface/EventSetup.h"
 #include "DataFormats/HGCalReco/interface/Trackster.h"
 #include "DataFormats/HGCalReco/interface/SuperTrackster.h"
+#include "SimDataFormats/CaloAnalysis/interface/CaloParticle.h"
+#include "DataFormats/TrackReco/interface/Track.h"
+#include "DataFormats/TrackReco/interface/TrackFwd.h"
+#include "CommonTools/Utils/interface/StringCutObjectSelector.h"
 
 namespace edm {
   class Event;
@@ -28,8 +32,13 @@ namespace ticl {
 
     virtual void linkTracksters(const edm::Event& evt,
                                 const edm::EventSetup& es,
-                                std::vector<Trackster> &tracksters,
-                                std::vector<SuperTrackster>& result) = 0;
+                                const std::vector<reco::Track>& tracks,
+                                const StringCutObjectSelector<reco::Track> cutTk,
+                                const std::vector<CaloParticle>& caloParticles,
+                                const std::vector<Trackster> &tracksters,
+                                const std::vector<Trackster> &simTracksters,
+                                std::vector<SuperTrackster>& resultTracksters,
+                                std::vector<SuperTrackster>& resultSimTracksters) = 0;
 
     static void fillPSetDescription(edm::ParameterSetDescription& desc) {};
 

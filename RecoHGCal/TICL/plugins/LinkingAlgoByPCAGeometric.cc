@@ -16,14 +16,8 @@ LinkingAlgoByPCAGeometric::LinkingAlgoByPCAGeometric(const edm::ParameterSet &co
       bfieldToken_(sumes.esConsumes<MagneticField, IdealMagneticFieldRecord, edm::Transition::BeginRun>()),
       detector_(conf.getParameter<std::string>("detector")),
       propName_(conf.getParameter<std::string>("propagator")),
-      propagatorToken_(sumes.esConsumes<Propagator, TrackingComponentsRecord>(
-        edm::ESInputTag("", propName_))),
-      //trackstersMergeToken_(sumes.consumes<std::vector<Trackster>>(conf.getParameter<edm::InputTag>("trackstersMerge"))),
-      simTSToken_(sumes.consumes<std::vector<Trackster>>(conf.getParameter<edm::InputTag>("label_simTst"))),
-      trackColToken_(sumes.consumes<reco::TrackCollection>(conf.getParameter<edm::InputTag>("tracks"))),
-      caloParticlesToken_(sumes.consumes<std::vector<CaloParticle>>(conf.getParameter<edm::InputTag>("caloParticles"))),
-      layerClustersToken_(sumes.consumes<std::vector<reco::CaloCluster>>(conf.getParameter<edm::InputTag>("layerClusters"))),
-      cutTk_(conf.getParameter<std::string>("cutTk")) {
+      propagatorToken_(sumes.esConsumes<Propagator, TrackingComponentsRecord, edm::Transition::BeginRun>(
+        edm::ESInputTag("", propName_))) {
         std::string detectorName_ = (detector_ == "HFNose") ? "HGCalHFNoseSensitive" : "HGCalEESensitive";
         hdcToken_ = sumes.esConsumes<HGCalDDDConstants, IdealGeometryRecord, edm::Transition::BeginRun>(
           edm::ESInputTag("", detectorName_));
@@ -42,6 +36,7 @@ void LinkingAlgoByPCAGeometric::initialize(const edm::EventSetup &es) {
 
   //bFieldProd = &es.getData(bfieldToken_);
   bfield_ = es.getHandle(bfieldToken_);
+  propagator_ = es.getHandle(propagatorToken_);
 }
 
 void LinkingAlgoByPCAGeometric::buildFirstLayers() {
@@ -60,8 +55,13 @@ void LinkingAlgoByPCAGeometric::buildFirstLayers() {
 
 void LinkingAlgoByPCAGeometric::linkTracksters(const edm::Event &evt,
                                                const edm::EventSetup &es,
-                                               std::vector<Trackster> &tracksters,
-                                               std::vector<SuperTrackster> &result) {
+                                               const std::vector<reco::Track> &tracks,
+                                               const StringCutObjectSelector<reco::Track> cutTk,
+                                               const std::vector<CaloParticle> &caloParticles,
+                                               const std::vector<Trackster> &tracksters,
+                                               const std::vector<Trackster> &simTracksters,
+                                               std::vector<SuperTrackster> &resultTracksters,
+                                               std::vector<SuperTrackster> &resultSimTracksters) {
   
   const double simTracksterEnergyCut = 0.; // S/TS < this frac of CP energy not selected
   const double tracksterEnergyCut = 0.;
@@ -69,29 +69,9 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const edm::Event &evt,
 
   
   auto bFieldProd = bfield_.product();
-  propagator_ = es.getHandle(propagatorToken_);
   const Propagator &prop = (*propagator_);
   
   buildFirstLayers();
-
-  /*edm::Handle<std::vector<Trackster>> trackstersMergeH;
-  evt.getByToken(trackstersMergeToken_, trackstersMergeH);
-  auto const &tracksters = *trackstersMergeH.product();*/
-
-  edm::Handle<std::vector<Trackster>> simTSH;
-  evt.getByToken(simTSToken_, simTSH);
-  auto const &simTracksters = *simTSH.product();  
-
-  edm::Handle<reco::TrackCollection> tracksH;
-  evt.getByToken(trackColToken_, tracksH);
-
-  edm::Handle<std::vector<CaloParticle>> caloParticlesH;
-  evt.getByToken(caloParticlesToken_, caloParticlesH);
-  auto const& caloParticles = *caloParticlesH.product();
-
-  edm::Handle<std::vector<reco::CaloCluster>> layerClustersH;
-  evt.getByToken(layerClustersToken_, layerClustersH);
-  auto const& layerClusters = *layerClustersH.product();
 
 
   // propagated point collections
@@ -128,10 +108,9 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const edm::Event &evt,
   } // CP
 
   // Propagate tracks to the HGCal front
-  unsigned nTracks = tracksH->size();
-  for (unsigned i = 0; i < nTracks; ++i) {
-    const reco::Track &tk = (*tracksH)[i];
-    if (!cutTk_((tk))) {
+  for (unsigned i = 0; i < tracks.size(); ++i) {
+    const auto tk = tracks[i];
+    if (!cutTk((tk))) {
       continue;
     }
 
@@ -329,21 +308,18 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const edm::Event &evt,
 
   for (unsigned i = 0; i < trackPcol.size(); ++i) {
     auto const trackstersLinked = tracksters_near[i];
-    if (trackstersLinked.empty()) continue;
     const unsigned track = i;
-    auto resultCandidate = SuperTrackster(trackstersLinked, track);
-    result.push_back(resultCandidate);
+    SuperTrackster resultTS(trackstersLinked, track);
+    resultTracksters.push_back(resultTS);
+
+    auto const simTrackstersLinked = simtracksters_near[i];
+    SuperTrackster resultSTS(simTrackstersLinked, track);
+    resultSimTracksters.push_back(resultSTS);
   }
 
 } // linkTracksters
 
 void LinkingAlgoByPCAGeometric::fillPSetDescription(edm::ParameterSetDescription& desc) {
-  //desc.add<edm::InputTag>("trackstersMerge", edm::InputTag("ticlTrackstersMerge"));
-  desc.add<edm::InputTag>("label_simTst", edm::InputTag("ticlSimTracksters"));
-  desc.add<edm::InputTag>("tracks", edm::InputTag("generalTracks"));
-  desc.add<edm::InputTag>("caloParticles", edm::InputTag("mix", "MergedCaloTruth"));
-  desc.add<edm::InputTag>("layerClusters", edm::InputTag("hgcalLayerClusters"));
-  //desc.add<edm::InputTag>("layer_clustersTime", edm::InputTag("hgcalLayerClusters", "timeLayerCluster"));
   desc.add<std::string>("detector","HGCAL");
   desc.add<std::string>("propagator","PropagatorWithMaterial");
   desc.add<std::string>("cutTk",

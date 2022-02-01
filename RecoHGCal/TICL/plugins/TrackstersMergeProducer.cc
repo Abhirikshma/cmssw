@@ -23,6 +23,7 @@
 #include "DataFormats/HGCalReco/interface/TICLCandidate.h"
 #include "DataFormats/TrackReco/interface/TrackFwd.h"
 #include "DataFormats/Math/interface/Vector3D.h"
+#include "SimDataFormats/CaloAnalysis/interface/CaloParticle.h"
 
 #include "RecoHGCal/TICL/interface/GlobalCache.h"
 
@@ -102,8 +103,9 @@ private:
   const edm::EDGetTokenT<std::vector<TICLSeedingRegion>> seedingTrk_token_;
   const edm::EDGetTokenT<std::vector<reco::CaloCluster>> clusters_token_;
   const edm::EDGetTokenT<edm::ValueMap<std::pair<float, float>>> clustersTime_token_;
+  const edm::EDGetTokenT<std::vector<Trackster>> simTS_token_;
   const edm::EDGetTokenT<std::vector<reco::Track>> tracks_token_;
-  const edm::EDGetTokenT<reco::TrackCollection> track_col_token_;
+  const edm::EDGetTokenT<std::vector<CaloParticle>> caloParticles_token_;
   const edm::ESGetToken<CaloGeometry, CaloGeometryRecord> geometry_token_;
   const std::string tfDnnLabel_;
   const edm::ESGetToken<TfGraphDefWrapper, TfGraphRecord> tfDnnToken_;
@@ -165,15 +167,16 @@ TrackstersMergeProducer::TrackstersMergeProducer(const edm::ParameterSet &ps)
       clusters_token_(consumes<std::vector<reco::CaloCluster>>(ps.getParameter<edm::InputTag>("layer_clusters"))),
       clustersTime_token_(
           consumes<edm::ValueMap<std::pair<float, float>>>(ps.getParameter<edm::InputTag>("layer_clustersTime"))),
+      simTS_token_(consumes<std::vector<Trackster>>(ps.getParameter<edm::InputTag>("label_simTst"))),
       tracks_token_(consumes<std::vector<reco::Track>>(ps.getParameter<edm::InputTag>("tracks"))),
-      track_col_token_(consumes<reco::TrackCollection>(ps.getParameter<edm::InputTag>("tracks"))),
+      caloParticles_token_(consumes<std::vector<CaloParticle>>(ps.getParameter<edm::InputTag>("caloParticles"))),
       geometry_token_(esConsumes<CaloGeometry, CaloGeometryRecord>()),
       tfDnnLabel_(ps.getParameter<std::string>("tfDnnLabel")),
       tfDnnToken_(esConsumes(edm::ESInputTag("", tfDnnLabel_))),
       tfSession_(nullptr),
       detector_(ps.getParameter<std::string>("detector")),
       propName_(ps.getParameter<std::string>("propagator")),
-      bfield_token_(esConsumes<MagneticField, IdealMagneticFieldRecord>()),
+      bfield_token_(esConsumes<MagneticField, IdealMagneticFieldRecord, edm::Transition::BeginRun>()),
       propagator_token_(esConsumes<Propagator, TrackingComponentsRecord>(
         edm::ESInputTag("",propName_))), 
       optimiseAcrossTracksters_(ps.getParameter<bool>("optimiseAcrossTracksters")),
@@ -204,17 +207,19 @@ TrackstersMergeProducer::TrackstersMergeProducer(const edm::ParameterSet &ps)
       eidSession_(nullptr) {
   produces<std::vector<Trackster>>();
   produces<std::vector<TICLCandidate>>();
-  produces<std::vector<SuperTrackster>>();
+
+  produces<std::vector<SuperTrackster>>("linkedTrackster");
+  produces<std::vector<SuperTrackster>>("linkedSimTrackster");
+
   std::string detectorName_ = (detector_ == "HFNose") ? "HGCalHFNoseSensitive" : "HGCalEESensitive";
   //std::string detectorName_ = "HGCalEESensitive";
-  hdc_token_ = esConsumes<HGCalDDDConstants, IdealGeometryRecord>(
+  hdc_token_ = esConsumes<HGCalDDDConstants, IdealGeometryRecord, edm::Transition::BeginRun>(
     edm::ESInputTag("",detectorName_));
 
   auto sumes = consumesCollector();
   auto linkingPSet = ps.getParameter<edm::ParameterSet>("linkingPSet");
   auto algoType = linkingPSet.getParameter<std::string>("type");
   linkingAlgo_ = LinkingAlgoFactory::get()->create(algoType, linkingPSet, sumes);
-
 }
 
 void TrackstersMergeProducer::beginJob() {}
@@ -385,6 +390,14 @@ void TrackstersMergeProducer::produce(edm::Event &evt, const edm::EventSetup &es
   evt.getByToken(tracks_token_, track_h);
   const auto &tracks = *track_h;
 
+  edm::Handle<std::vector<Trackster>> simTS_h;
+  evt.getByToken(simTS_token_, simTS_h);
+  auto const &simTracksters = *simTS_h.product();
+
+  edm::Handle<std::vector<CaloParticle>> caloParticles_h;
+  evt.getByToken(caloParticles_token_, caloParticles_h);
+  auto const &caloParticles = *caloParticles_h.product();
+
   edm::Handle<std::vector<reco::CaloCluster>> cluster_h;
   evt.getByToken(clusters_token_, cluster_h);
   const auto &layerClusters = *cluster_h;
@@ -478,8 +491,19 @@ void TrackstersMergeProducer::produce(edm::Event &evt, const edm::EventSetup &es
   //linkTracksters(evt, es, *resultTrackstersMerged);
 
   auto resultTrackstersLinked = std::make_unique<std::vector<SuperTrackster>>();
-  linkingAlgo_->linkTracksters(evt, es, *resultTrackstersMerged, *resultTrackstersLinked);
-  evt.put(std::move(resultTrackstersLinked));
+  auto resultSimTrackstersLinked = std::make_unique<std::vector<SuperTrackster>>();
+  linkingAlgo_->linkTracksters(evt,
+                               es,
+                               tracks,
+                               cutTk_,
+                               caloParticles,
+                               *resultTrackstersMerged,
+                               simTracksters,
+                               *resultTrackstersLinked,
+                               *resultSimTrackstersLinked);
+
+  evt.put(std::move(resultTrackstersLinked),"linkedTrackster");
+  evt.put(std::move(resultSimTrackstersLinked),"linkedSimTrackster");
 
   auto trackstersMergedHandle = evt.put(std::move(resultTrackstersMerged));
 
@@ -961,6 +985,8 @@ void TrackstersMergeProducer::fillDescriptions(edm::ConfigurationDescriptions &d
   desc.add<edm::InputTag>("seedingTrk", edm::InputTag("ticlSeedingTrk"));
   desc.add<edm::InputTag>("layer_clusters", edm::InputTag("hgcalLayerClusters"));
   desc.add<edm::InputTag>("layer_clustersTime", edm::InputTag("hgcalLayerClusters", "timeLayerCluster"));
+  desc.add<edm::InputTag>("label_simTst", edm::InputTag("ticlSimTracksters"));
+  desc.add<edm::InputTag>("caloParticles", edm::InputTag("mix", "MergedCaloTruth"));
   desc.add<edm::InputTag>("tracks", edm::InputTag("generalTracks"));
   desc.add<std::string>("detector","HGCAL");
   desc.add<std::string>("propagator","PropagatorWithMaterial");
