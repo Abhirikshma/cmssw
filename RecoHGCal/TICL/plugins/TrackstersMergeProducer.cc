@@ -388,13 +388,15 @@ void TrackstersMergeProducer::produce(edm::Event &evt, const edm::EventSetup &es
   auto resultSimTrackstersLinked = std::make_unique<std::vector<SuperTrackster>>();
   linkingAlgo_->linkTracksters(tracks,
                                cutTk_,
-                               caloParticles,
                                *resultTrackstersMerged,
+                               *resultTrackstersLinked);
+
+  linkingAlgo_->linkTracksters(tracks,
+                               cutTk_,
                                simTracksters,
-                               *resultTrackstersLinked,
                                *resultSimTrackstersLinked);
 
-  /*std::vector<SuperTrackster> &tracksterLinkingDebug = *resultTrackstersLinked;
+  std::vector<SuperTrackster> &tracksterLinkingDebug = *resultTrackstersLinked;
   for (auto sup : tracksterLinkingDebug) {
     auto track = sup.trackIdx();
     auto tracksters = sup.trackstersIdxs();
@@ -403,7 +405,7 @@ void TrackstersMergeProducer::produce(edm::Event &evt, const edm::EventSetup &es
     for (auto ts : tracksters) 
     std::cout << ts << " ";
     std::cout << std::endl;
-  }*/
+  }
   evt.put(std::move(resultTrackstersLinked), "linkedTrackster");
   evt.put(std::move(resultSimTrackstersLinked), "linkedSimTrackster");
 

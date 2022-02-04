@@ -39,11 +39,8 @@ namespace ticl {
 
     virtual void linkTracksters(const std::vector<reco::Track>& tracks,
                                 const StringCutObjectSelector<reco::Track> cutTk,
-                                const std::vector<CaloParticle>& caloParticles,
                                 const std::vector<Trackster>& tracksters,
-                                const std::vector<Trackster>& simTracksters,
-                                std::vector<SuperTrackster>& resultTracksters,
-                                std::vector<SuperTrackster>& resultSimTracksters) = 0;
+                                std::vector<SuperTrackster>& resultTracksters) = 0;
 
     static void fillPSetDescription(edm::ParameterSetDescription& desc){};
   };
