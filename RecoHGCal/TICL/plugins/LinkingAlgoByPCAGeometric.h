@@ -17,6 +17,7 @@
 
 #include "DataFormats/Math/interface/Vector3D.h"
 #include "DataFormats/GeometrySurface/interface/BoundDisk.h"
+#include "DataFormats/HGCalReco/interface/TICLLayerTile.h"
 
 #include "TrackingTools/Records/interface/TrackingComponentsRecord.h"
 
@@ -40,19 +41,18 @@ namespace ticl {
 
     void linkTracksters(const std::vector<reco::Track> &,
                         const StringCutObjectSelector<reco::Track>,
-                        const std::vector<CaloParticle> &,
                         const std::vector<Trackster> &,
-                        const std::vector<Trackster> &,
-                        std::vector<SuperTrackster> &,
                         std::vector<SuperTrackster> &) override;
 
     static void fillPSetDescription(edm::ParameterSetDescription &desc);
 
   private:
-    typedef Trackster::IterationIndex TracksterIterIndex;
     typedef math::XYZVector Vector;
 
     void buildFirstLayers();
+
+    math::XYZVector propagateTrackster(
+        const Trackster &t, const unsigned idx, float zVal, TICLLayerTile &tile_fw, TICLLayerTile &tile_bw);
 
     std::once_flag initializeGeometry_;
 

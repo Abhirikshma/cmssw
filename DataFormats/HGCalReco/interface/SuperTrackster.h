@@ -39,6 +39,7 @@ namespace ticl {
     uint32_t trackIdx_;
     bool hasTrack;
   };
+  typedef std::vector<SuperTrackster> SuperTracksterCollection;
 }  // namespace ticl
 
 #endif
