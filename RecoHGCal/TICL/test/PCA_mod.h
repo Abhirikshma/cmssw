@@ -82,15 +82,13 @@ std::array<std::vector<unsigned>, 100> translateTrackster(const Trackster &ts,
   return result;
 }
 
-std::array<double, 100> assignPCAtoTracksters_mod(std::vector<Trackster> &tracksters,
+void assignPCAtoTracksters_mod(std::vector<Trackster> &tracksters,
                                                   const std::vector<reco::CaloCluster> &layerClusters,
                                                   const edm::ValueMap<std::pair<float, float>> &layerClustersTime,
                                                   hgcal::RecHitTools rhtools,
                                                   double z_limit_em,
                                                   bool energyWeight = true) {
   LogDebug("TrackstersPCA_Eigen") << "------- Eigen -------" << std::endl;
-  int nonZero_trackster = 0;
-  std::array<double, 100> layer_Efrac = {};
   for (auto &trackster : tracksters) {
     Eigen::Vector3d point;
     point << 0., 0., 0.;
@@ -126,6 +124,8 @@ std::array<double, 100> assignPCAtoTracksters_mod(std::vector<Trackster> &tracks
     std::vector<float> timeErrors;
     std::set<uint32_t> usedLC;
 
+    std::vector<double> layerClusterEnergies;
+
     for (size_t i = 0; i < N; ++i) {
       auto fraction = 1.f / trackster.vertex_multiplicity(i);
       trackster.addToRawEnergy(layerClusters[trackster.vertices(i)].energy() * fraction);
@@ -147,6 +147,8 @@ std::array<double, 100> assignPCAtoTracksters_mod(std::vector<Trackster> &tracks
           timeErrors.push_back(1. / pow(timeE, 2));
         }
       }
+
+      layerClusterEnergies.push_back(layerClusters[trackster.vertices(i)].energy());
     }
     if (energyWeight && trackster.raw_energy())
       barycenter /= trackster.raw_energy();
@@ -155,27 +157,14 @@ std::array<double, 100> assignPCAtoTracksters_mod(std::vector<Trackster> &tracks
     std::pair<float, float> timeTrackster = timeEstimator.fixSizeHighestDensity(times, timeErrors);
 
     // LayerCluster filtering for the modified PCA
-    auto vertices_by_layer = sortByLayer(trackster, layerClusters, rhtools);
-    std::vector<double> layerClusterenergies;
 
-    for (unsigned i = 0; i <= rhtools.lastLayer(); ++i) {
-      auto vertices_in_layer = vertices_by_layer[i];
-      for (auto v : vertices_in_layer) {
-        layerClusterenergies.push_back(layerClusters[trackster.vertices(v)].energy());
-      }
-    }
-
-    // max E LC
-    auto result_glob = std::max_element(layerClusterenergies.begin(), layerClusterenergies.end());
-    auto maxE_vertex = std::distance(layerClusterenergies.begin(), result_glob);
+    // max E LC, layer
+    auto maxE_vertex = std::distance(layerClusterEnergies.begin(), std::max_element(layerClusterEnergies.begin(), layerClusterEnergies.end()));
     auto maxE_layer = getLayerFromLC(layerClusters[trackster.vertices(maxE_vertex)], rhtools);
-    //double maxEnergy = layerClusters[trackster.vertices(maxE_vertex)].energy();
-    double maxElayer_energy = 0;  // energy in layer of max E LC
-    for (auto vrt : vertices_by_layer[maxE_layer])
-      maxElayer_energy += layerClusters[trackster.vertices(vrt)].energy();
 
     std::vector<unsigned> filtered_idx;  // higest energy vertices in a layer
     double filtered_energy = 0;
+    auto vertices_by_layer = sortByLayer(trackster, layerClusters, rhtools);
 
     for (unsigned i = 1; i <= rhtools.lastLayer(); ++i) {
       auto vertices_in_layer = vertices_by_layer[i];
@@ -186,11 +175,11 @@ std::array<double, 100> assignPCAtoTracksters_mod(std::vector<Trackster> &tracks
       for (auto vrt : vertices_in_layer)
         energies_in_layer.push_back(layerClusters[trackster.vertices(vrt)].energy());
 
-      auto result_inlayer = std::max_element(energies_in_layer.begin(), energies_in_layer.end());
-      unsigned maxE_id = std::distance(energies_in_layer.begin(), result_inlayer);
+      unsigned maxEid_inLayer = std::distance(energies_in_layer.begin(), std::max_element(energies_in_layer.begin(), energies_in_layer.end()));
 
-      if ((int)i >= (int)maxE_layer - 20 && (int)i <= (int)maxE_layer + 5) {
-        auto filtered_vert = vertices_in_layer[maxE_id];
+      // layer based filtering of what goes into the PCA
+      if ((int)i >= (int)maxE_layer - 30 && (int)i <= (int)maxE_layer + 0) {
+        auto filtered_vert = vertices_in_layer[maxEid_inLayer];
         filtered_idx.push_back(filtered_vert);
 
         const auto maxE_LC = layerClusters[trackster.vertices(filtered_vert)];
@@ -201,24 +190,7 @@ std::array<double, 100> assignPCAtoTracksters_mod(std::vector<Trackster> &tracks
       }
     }
 
-    filtered_barycenter /= filtered_energy;
-
-    // Translate trackster to have layer of max E LC at 50
-    auto vertT_by_layer = translateTrackster(trackster, layerClusters, rhtools, maxE_layer);
-
-    // E frac by layer for translated trackster
-    for (unsigned i = 0; i < 100; ++i) {
-      auto vertices_in_layer = vertT_by_layer[i];
-      //if (vertices_in_layer.empty()) continue;
-      double e_layer = 0.;
-      for (auto v : vertices_in_layer)
-        e_layer += layerClusters[trackster.vertices(v)].energy();
-      //e_layer /= maxEnergy;
-      e_layer /= maxElayer_energy;
-      layer_Efrac[i] += e_layer;
-    }
-
-    std::cout << "trackster energy = " << trackster.raw_energy() << std::endl;
+    filtered_barycenter /= filtered_energy; // tested instead of barycenter for the cov matrix but poorer linking results
 
     // Compute the Covariance Matrix and the sum of the squared weights, used
     // to compute the correct normalization.
@@ -294,14 +266,6 @@ std::array<double, 100> assignPCAtoTracksters_mod(std::vector<Trackster> &tracks
     LogDebug("TrackstersPCA") << "SigmasEigen in PCA space: " << sigmasEigen[2] << ", " << sigmasEigen[1] << ", "
                               << sigmasEigen[0] << std::endl;
     LogDebug("TrackstersPCA") << "covM:     \n" << covM << std::endl;
-    ++nonZero_trackster;
   }
-
-  // mean E frac per layer
-  if (nonZero_trackster > 0)
-    for (int i = 0; i < 100; ++i) {
-      layer_Efrac[i] /= nonZero_trackster;
-    }
-  return layer_Efrac;
 }
 #endif
