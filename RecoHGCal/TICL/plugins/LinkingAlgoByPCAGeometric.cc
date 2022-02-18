@@ -1,9 +1,10 @@
 #include <cmath>
-#include <array>
+#include <ostream>
 #include "RecoHGCal/TICL/plugins/LinkingAlgoByPCAGeometric.h"
 
 #include "DataFormats/Math/interface/deltaR.h"
 #include "DataFormats/GeometrySurface/interface/BoundDisk.h"
+#include "DataFormats/HGCalReco/interface/TICLLayerTile.h"
 
 #include "TrackingTools/TrajectoryState/interface/TrajectoryStateTransform.h"
 
@@ -27,7 +28,7 @@ void LinkingAlgoByPCAGeometric::initialize(const HGCalDDDConstants *hgcons,
 }
 
 math::XYZVector LinkingAlgoByPCAGeometric::propagateTrackster(
-    const Trackster &t, const unsigned idx, float zVal, TICLLayerTile &tile_fw, TICLLayerTile &tile_bw) {
+    const Trackster &t, const unsigned idx, float zVal, std::array<TICLLayerTile, 2>& tracksterTiles) {
   // any energy or caloparticle based selection has to be handled outside
   Vector baryc = t.barycenter();
   Vector directnv = t.eigenvectors(0);
@@ -42,10 +43,10 @@ math::XYZVector LinkingAlgoByPCAGeometric::propagateTrackster(
   Vector tPoint(xOnSurface, yOnSurface, zVal);
 
   if (tPoint.Eta() > 0)
-    tile_fw.fill(tPoint.Eta(), tPoint.Phi(), idx);
+    tracksterTiles[1].fill(tPoint.Eta(), tPoint.Phi(), idx);
 
   else if (tPoint.Eta() < 0)
-    tile_bw.fill(tPoint.Eta(), tPoint.Phi(), idx);
+    tracksterTiles[0].fill(tPoint.Eta(), tPoint.Phi(), idx);
 
   return tPoint;
 }
@@ -68,9 +69,9 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
                                                const StringCutObjectSelector<reco::Track> cutTk,
                                                const std::vector<Trackster> &tracksters,
                                                std::vector<SuperTrackster> &resultLinked) {
-  // Selections based on CaloParticles / energy have to be implemented outside
+  // Selections based on CaloParticles or energy have to be implemented outside
 
-  const double delta_search = 0.02;  // search box delta in eta-phi
+  const double delta = 0.02;  // search box delta in eta-phi
 
   auto bFieldProd = bfield_.product();
   const Propagator &prop = (*propagator_);
@@ -83,10 +84,8 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
   std::vector<std::pair<Vector, int>> tracksterPcol;     // same but for Tracksters, errors not included here yet
 
   // tiles
-  TICLLayerTile tracksterProp_tile_fw;
-  TICLLayerTile tracksterProp_tile_bw;
-  TICLLayerTile trackProp_tile_fw;
-  TICLLayerTile trackProp_tile_bw;
+  std::array<TICLLayerTile, 2> tracksterPropTiles = {}; // layer 0 is bw, 1 is fw
+  std::array<TICLLayerTile, 2> trackPropTiles = {};
 
 
   // Propagate tracks to the HGCal front
@@ -110,10 +109,10 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
       trackPcol.push_back(std::make_pair(std::make_pair(trackP, track_err), i));
 
       if (trackP.Eta() > 0)
-        trackProp_tile_fw.fill(trackP.Eta(), trackP.Phi(), i);
+        trackPropTiles[1].fill(trackP.Eta(), trackP.Phi(), i);
 
       else if (trackP.Eta() < 0)
-        trackProp_tile_bw.fill(trackP.Eta(), trackP.Phi(), i);
+        trackPropTiles[0].fill(trackP.Eta(), trackP.Phi(), i);
     }
   }  // Tracks
 
@@ -127,13 +126,13 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
       continue;
 
     float zVal = hgcons_->waferZ(1, true);
-    Vector tsP = propagateTrackster(t, i, zVal, tracksterProp_tile_fw, tracksterProp_tile_bw);
+    Vector tsP = propagateTrackster(t, i, zVal, tracksterPropTiles);
     tracksterPcol.push_back(std::make_pair(tsP, i));
     selectedTS_idx.push_back(i);
   }  // TS
 
-  // Search box over tiles + preliminary linking
-  std::vector<unsigned> tracksters_near[trackPcol.size()];  // i-th: indices of tracksters 'linked' to track i
+  // Search box over trackster tiles + preliminary linking
+  std::vector<unsigned> tracksters_near[trackPcol.size()];  // i-th element: vector of indices of tracksters 'linked' to track i
   int nth = 0;
   for (auto i : trackPcol) {
     auto trackP = i.first.first;
@@ -142,13 +141,11 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
     double tk_eta = trackP.Eta();
     double tk_phi = trackP.Phi();
 
-    double delta = delta_search;
-
     if (tk_eta > 0) {
-      double eta_min = ((tk_eta - delta) > 0) ? (tk_eta - delta) : 0;
+      double eta_min = std::max(tk_eta - delta, 0.);
 
-      std::array<int, 4> search_box =
-          tracksterProp_tile_fw.searchBoxEtaPhi(eta_min, tk_eta + delta, tk_phi - delta, tk_phi + delta);
+      const TICLLayerTile &tile = tracksterPropTiles[1];
+      std::array<int, 4> search_box = tile.searchBoxEtaPhi(eta_min, tk_eta + delta, tk_phi - delta, tk_phi + delta);
       if (search_box[2] > search_box[3]) {
         double temp = search_box[3];
         search_box[3] = search_box[2];
@@ -157,7 +154,7 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
 
       for (int eta_i = search_box[0]; eta_i <= search_box[1]; ++eta_i) {
         for (int phi_i = search_box[2]; phi_i <= search_box[3]; ++phi_i) {
-          auto tracksters_in_box = tracksterProp_tile_fw[tracksterProp_tile_fw.globalBin(eta_i, phi_i)];
+          auto &tracksters_in_box = tile[tile.globalBin(eta_i, phi_i)];
           tracksters_near[nth].insert(
               std::end(tracksters_near[nth]), std::begin(tracksters_in_box), std::end(tracksters_in_box));
         }
@@ -165,10 +162,10 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
     }    // forward
 
     if (tk_eta < 0) {
-      double eta_min = ((abs(tk_eta) - delta) > 0) ? (abs(tk_eta) - delta) : 0;
+      double eta_min = std::max(abs(tk_eta) - delta, 0.);
 
-      std::array<int, 4> search_box =
-          tracksterProp_tile_bw.searchBoxEtaPhi(eta_min, abs(tk_eta) + delta, tk_phi - delta, tk_phi + delta);
+      const TICLLayerTile &tile = tracksterPropTiles[0];
+      std::array<int, 4> search_box = tile.searchBoxEtaPhi(eta_min, abs(tk_eta) + delta, tk_phi - delta, tk_phi + delta);
       if (search_box[2] > search_box[3]) {
         double temp = search_box[3];
         search_box[3] = search_box[2];
@@ -177,7 +174,7 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
 
       for (int eta_i = search_box[0]; eta_i <= search_box[1]; ++eta_i) {
         for (int phi_i = search_box[2]; phi_i <= search_box[3]; ++phi_i) {
-          auto tracksters_in_box = tracksterProp_tile_bw[tracksterProp_tile_bw.globalBin(eta_i, phi_i)];
+          auto &tracksters_in_box = tile[tile.globalBin(eta_i, phi_i)];
           tracksters_near[nth].insert(
               std::end(tracksters_near[nth]), std::begin(tracksters_in_box), std::end(tracksters_in_box));
         }
