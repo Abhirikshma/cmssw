@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <array>
 #include "RecoHGCal/TICL/plugins/LinkingAlgoBase.h"
 
 #include "FWCore/Framework/interface/Frameworkfwd.h"
@@ -52,7 +53,7 @@ namespace ticl {
     void buildFirstLayers();
 
     math::XYZVector propagateTrackster(
-        const Trackster &t, const unsigned idx, float zVal, TICLLayerTile &tile_fw, TICLLayerTile &tile_bw);
+        const Trackster &t, const unsigned idx, float zVal, std::array<TICLLayerTile, 2>& tracksterTiles);
 
     std::once_flag initializeGeometry_;
 
