@@ -41,16 +41,17 @@ namespace ticl {
                     const edm::ESHandle<Propagator> propH) override;
 
     void linkTracksters(const std::vector<reco::Track> &,
+                        const edm::Handle<std::vector<reco::Track>>,
                         const StringCutObjectSelector<reco::Track>,
-                        const std::vector<Trackster> &,
-                        std::vector<SuperTrackster> &) override;
+                        const edm::OrphanHandle<std::vector<Trackster>>,
+                        std::vector<TICLCandidate> &) override;
 
     static void fillPSetDescription(edm::ParameterSetDescription &desc);
 
   private:
     typedef math::XYZVector Vector;
 
-    void buildFirstLayers();
+    void buildLayers();
 
     math::XYZVector propagateTrackster(
         const Trackster &t, const unsigned idx, float zVal, std::array<TICLLayerTile, 2>& tracksterTiles);
@@ -60,6 +61,7 @@ namespace ticl {
     const HGCalDDDConstants *hgcons_;
 
     std::unique_ptr<GeomDet> firstDisk_[2];
+    std::unique_ptr<GeomDet> interfaceDisk_[2];
 
     hgcal::RecHitTools rhtools_;
 

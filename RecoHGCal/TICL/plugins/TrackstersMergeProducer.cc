@@ -58,7 +58,6 @@
 
 #include "TrackstersPCA.h"
 #include "SeedingRegionByTracks.h"
-#include "DataFormats/HGCalReco/interface/SuperTrackster.h"
 
 using namespace ticl;
 
@@ -205,8 +204,7 @@ TrackstersMergeProducer::TrackstersMergeProducer(const edm::ParameterSet &ps)
   produces<std::vector<Trackster>>();
   produces<std::vector<TICLCandidate>>();
 
-  produces<std::vector<SuperTrackster>>("linkedTrackster");
-  produces<std::vector<SuperTrackster>>("linkedSimTrackster");
+  produces<std::vector<TICLCandidate>>("linkedTrackster");
 
   std::string detectorName_ = (detector_ == "HFNose") ? "HGCalHFNoseSensitive" : "HGCalEESensitive";
   //std::string detectorName_ = "HGCalEESensitive";
@@ -298,7 +296,7 @@ void TrackstersMergeProducer::produce(edm::Event &evt, const edm::EventSetup &es
 
   edm::Handle<std::vector<CaloParticle>> caloParticles_h;
   evt.getByToken(caloParticles_token_, caloParticles_h);
-  auto const &caloParticles = *caloParticles_h.product();
+  //auto const &caloParticles = *caloParticles_h.product();
 
   edm::Handle<std::vector<reco::CaloCluster>> cluster_h;
   evt.getByToken(clusters_token_, cluster_h);
@@ -389,34 +387,34 @@ void TrackstersMergeProducer::produce(edm::Event &evt, const edm::EventSetup &es
 
   printTrackstersDebug(*resultTrackstersMerged, "TrackstersMergeProducer");
 
+  auto trackstersMergedHandle = evt.put(std::move(resultTrackstersMerged));
+
   // Linking
 
-  auto resultTrackstersLinked = std::make_unique<std::vector<SuperTrackster>>();
-  auto resultSimTrackstersLinked = std::make_unique<std::vector<SuperTrackster>>();
+  auto resultTrackstersLinked = std::make_unique<std::vector<TICLCandidate>>();
   linkingAlgo_->linkTracksters(tracks,
+                               track_h,
                                cutTk_,
-                               *resultTrackstersMerged,
+                               trackstersMergedHandle,
                                *resultTrackstersLinked);
 
-  linkingAlgo_->linkTracksters(tracks,
-                               cutTk_,
-                               simTracksters,
-                               *resultSimTrackstersLinked);
 
-  std::vector<SuperTrackster> &tracksterLinkingDebug = *resultTrackstersLinked;
-  for (auto sup : tracksterLinkingDebug) {
-    auto track = sup.trackIdx();
-    auto tracksters = sup.trackstersIdxs();
-
-    std::cout << "Track " << track << " : ";
-    for (auto ts : tracksters) 
-    std::cout << ts << " ";
+  std::cout << "No. of Tracks : " << tracks.size() << std::endl;
+  std::cout << "No. of Tracksters : " << (*trackstersMergedHandle).size() << std::endl;
+  std::vector<TICLCandidate> &tracksterLinkingDebug = *resultTrackstersLinked;
+  for (auto cand : tracksterLinkingDebug) {
+    auto track_ptr = cand.trackPtr();
+    auto trackster_ptrs = cand.tracksters();
+    auto track_idx = track_ptr.get() - (edm::Ptr<reco::Track>(track_h, 0)).get();
+    track_idx = (track_ptr.isNull()) ? 9999 : track_idx;
+    std::cout << "track id : " << track_idx << " trackster ids : ";
+    for (auto ts_ptr : trackster_ptrs) {
+      auto ts_idx = ts_ptr.get() - (edm::Ptr<ticl::Trackster>(trackstersMergedHandle, 0)).get();
+      std::cout << ts_idx << " ";
+    }
     std::cout << std::endl;
   }
   evt.put(std::move(resultTrackstersLinked), "linkedTrackster");
-  evt.put(std::move(resultSimTrackstersLinked), "linkedSimTrackster");
-
-  auto trackstersMergedHandle = evt.put(std::move(resultTrackstersMerged));
 
   // TICL Candidate creation
   // We start from neutrals first

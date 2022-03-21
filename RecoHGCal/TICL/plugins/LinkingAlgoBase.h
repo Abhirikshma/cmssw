@@ -9,8 +9,9 @@
 #include "FWCore/Framework/interface/ConsumesCollector.h"
 #include "FWCore/Framework/interface/Event.h"
 #include "FWCore/Framework/interface/EventSetup.h"
+#include "DataFormats/Common/interface/OrphanHandle.h"
 #include "DataFormats/HGCalReco/interface/Trackster.h"
-#include "DataFormats/HGCalReco/interface/SuperTrackster.h"
+#include "DataFormats/HGCalReco/interface/TICLCandidate.h"
 #include "SimDataFormats/CaloAnalysis/interface/CaloParticle.h"
 #include "DataFormats/TrackReco/interface/Track.h"
 #include "DataFormats/TrackReco/interface/TrackFwd.h"
@@ -38,9 +39,10 @@ namespace ticl {
                             const edm::ESHandle<Propagator> propH) = 0;
 
     virtual void linkTracksters(const std::vector<reco::Track>& tracks,
+                                const edm::Handle<std::vector<reco::Track>> tkH,
                                 const StringCutObjectSelector<reco::Track> cutTk,
-                                const std::vector<Trackster>& tracksters,
-                                std::vector<SuperTrackster>& resultTracksters) = 0;
+                                const edm::OrphanHandle<std::vector<Trackster>> tsH,
+                                std::vector<TICLCandidate>& resultTracksters) = 0;
 
     static void fillPSetDescription(edm::ParameterSetDescription& desc){};
   };
