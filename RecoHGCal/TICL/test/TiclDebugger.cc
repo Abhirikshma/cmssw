@@ -41,7 +41,6 @@
 #include "DataFormats/HGCalReco/interface/TICLSeedingRegion.h"
 #include "DataFormats/GeometrySurface/interface/BoundDisk.h"
 #include "DataFormats/HGCalReco/interface/TICLCandidate.h"
-#include "DataFormats/HGCalReco/interface/SuperTrackster.h"
 #include "DataFormats/TrackReco/interface/TrackFwd.h"
 #include "DataFormats/Math/interface/Vector3D.h"
 
@@ -124,8 +123,6 @@ private:
   const edm::ESGetToken<MagneticField, IdealMagneticFieldRecord> bfield_token_;
   const edm::ESGetToken<Propagator, TrackingComponentsRecord> propagator_token_;
 
-  edm::EDGetTokenT<std::vector<ticl::SuperTrackster>> trackstersLinkedToken_;
-  edm::EDGetTokenT<std::vector<ticl::SuperTrackster>> simTrackstersLinkedToken_;
 
   std::once_flag initializeGeometry_;
 
@@ -244,9 +241,6 @@ TiclDebugger::TiclDebugger(const edm::ParameterSet& iConfig)
   layerClustersToken_ = iC.consumes<std::vector<reco::CaloCluster>>(layerClusters_);
   clustersTime_token_ =
       iC.consumes<edm::ValueMap<std::pair<float, float>>>(iConfig.getParameter<edm::InputTag>("layer_clustersTime"));
-
-  trackstersLinkedToken_ = iC.consumes<std::vector<ticl::SuperTrackster>>(iConfig.getParameter<edm::InputTag>("linkedTracksters"));
-  simTrackstersLinkedToken_ = iC.consumes<std::vector<ticl::SuperTrackster>>(iConfig.getParameter<edm::InputTag>("linkedSimTracksters"));
 
   std::string detectorName_ = (detector_ == "HFNose") ? "HGCalHFNoseSensitive" : "HGCalEESensitive";
   hdc_token_ = iC.esConsumes<HGCalDDDConstants, IdealGeometryRecord>(edm::ESInputTag("", detectorName_));
@@ -900,14 +894,6 @@ void TiclDebugger::analyze(const edm::Event& iEvent, const edm::EventSetup& iSet
   iEvent.getByToken(clustersTime_token_, clustersTimeH);
   const auto& layerClustersTimes = *clustersTimeH;
 
-  edm::Handle<std::vector<ticl::SuperTrackster>> tsLinkH;
-  iEvent.getByToken(trackstersLinkedToken_, tsLinkH);
-
-  edm::Handle<std::vector<ticl::SuperTrackster>> stsLinkH;
-  iEvent.getByToken(simTrackstersLinkedToken_, stsLinkH);
-  if (stsLinkH.isValid())
-  const auto& stsLinked = *stsLinkH.product();
-
   std::cout << "N tracksters " << tracksters_.size() << std::endl;
   std::cout << "N simTracksters " << simTracksters_.size() << std::endl;
   // PCA with cleaning
@@ -925,31 +911,6 @@ void TiclDebugger::analyze(const edm::Event& iEvent, const edm::EventSetup& iSet
 
   // Linking
   linkTracksters(iEvent, iSetup, tracksters_mutable, simTracksters_mutable, caloParticlesH);
-
-
-  // Find uniquely linked TS + fill histos etc. for validation
-  std::vector<unsigned> linked_unique; 
-  if (tsLinkH.isValid()) {
-    const auto& tsLinked = *tsLinkH.product();
-    for (const auto superts : tsLinked) {
-      unsigned tk = superts.trackIdx();
-      std::vector<unsigned> tss = superts.trackstersIdxs();
-      if (tss.empty()) continue;
-
-      for (const auto i : tss) {
-        bool already_in = (std::find(linked_unique.begin(), linked_unique.end(), i) != linked_unique.end());
-        if (!already_in) {
-          const ticl::Trackster &ts = tracksters[i];
-          linked_unique.push_back(i);
-
-          /*h_tksters_linked_eta->Fill(ts.barycenter().Eta());
-          h_eff_phi->Fill(ts.barycenter().Phi());  // divided later by h_tksters_tot_phi
-          h_eff_pT->Fill(ts.raw_pt());
-          h_eff_E->Fill(ts.raw_energy());*/
-        }
-      }
-    }
-  }
 
 
   // Trackster diagonistics, by layer
