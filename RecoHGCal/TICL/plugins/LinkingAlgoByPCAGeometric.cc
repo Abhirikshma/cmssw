@@ -84,6 +84,9 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
                                                std::vector<TICLCandidate> &resultLinked) {
   // Selections based on CaloParticles or energy have to be implemented outside
 
+  constexpr double mpion = 0.13957;
+  constexpr float mpion2 = mpion * mpion; 
+
   // search box deltas in eta-phi
   const double delta = 0.02;  // track -> trackster
   const double del_ts = 0.02;  // trackster CE-E -> CE-H
@@ -106,7 +109,19 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
   std::array<TICLLayerTile, 2> tracksterPropTiles = {}; // all Tracksters, propagated to layer 1
   std::array<TICLLayerTile, 2> tsPropIntTiles = {}; // all Tracksters, propagated to lastLayerEE
   std::array<TICLLayerTile, 2> tsHadPropIntTiles = {}; // Tracksters in CE-H, propagated to lastLayerEE
-  std::array<TICLLayerTile, 2> dummyTiles = {}; // dummy tile to pass to the propagate function
+
+  // filters (true for) anything but EM
+  std::vector<int> filter_on_categories_ = {0, 1};
+  double pid_threshold_ = 0.5;
+  double energy_em_over_total_threshold_ = 0.9;
+  auto filter_on_pids = [&](const Trackster &t) -> bool {
+    auto cumulative_prob = 0.;
+    for (auto index : filter_on_categories_) {
+      cumulative_prob += t.id_probabilities(index);
+    }
+    return (cumulative_prob <= pid_threshold_) &&
+          (t.raw_em_energy() < energy_em_over_total_threshold_ * t.raw_energy());
+  };
 
 
   // Propagate tracks
@@ -115,6 +130,8 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
     if (!cutTk((tk))) {
       continue;
     }
+    // don't consider tracks below 2 GeV for linking
+    if (std::sqrt(tk.p() * tk.p() + mpion2) < 2.0) continue;
 
     FreeTrajectoryState fts = trajectoryStateTransform::outerFreeState((tk), bFieldProd);
     int iSide = int(tk.eta() > 0);
@@ -154,8 +171,16 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
     // to lastLayerEE
     zVal = rhtools_.getPositionLayer(rhtools_.lastLayerEE()).z();
     tsP = propagateTrackster(t, i, zVal, tsPropIntTiles);
+
+    if (!filter_on_pids(t)) // EM tracksters
+      tsPropIntColl.push_back(std::make_pair(tsP, i));
+    else { // HAD
+      tsHadPropIntTiles[(t.barycenter().Z() > 0) ? 1:0].fill(tsP.Eta(), tsP.Phi(), i);
+      tsHadPropIntColl.push_back(std::make_pair(tsP, i));
+    }
   }  // TS
 
+  // Track-Trackster linking
   // step 3: linking tracks -> all tracksters, at layer 1
   std::vector<unsigned> tracksters_near[tracks.size()] = {}; // i-th element: vector of indices of tracksters 'linked' to track i
 
@@ -260,28 +285,8 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
     }    // backward
   }
 
-  // Trackster - trackster linking
-  // tracksters after the interface are propagated back and filled in a tile
-  // and those before are propagated to the interface and used
-  // to search for potential linkages in the tile of propagated tracksters
-  for (unsigned i = 0; i < tracksters.size(); ++i) {
-    const auto &t = tracksters[i];
-    Vector directnv = t.eigenvectors(0);
-    if (abs(directnv.Z()) < 0.00001)
-      continue;
-
-    float zVal = rhtools_.getPositionLayer(rhtools_.lastLayerEE()).z(); // interface of CE-E & CE-H
-
-    Vector tsP = propagateTrackster(t, i, zVal, dummyTiles);
-    
-    if (abs(t.barycenter().Z()) < abs(zVal)) // trackster in CE-E
-      tsPropIntColl.push_back(std::make_pair(tsP, i));
-    else { // in CE-H
-      tsHadPropIntTiles[(t.barycenter().Z() > 0) ? 1:0].fill(tsP.Eta(), tsP.Phi(), i);
-      tsHadPropIntColl.push_back(std::make_pair(tsP, i));
-    }
-  }
-  // step 2: linking Tracksters CE-E -> CE-H
+  // Trackster - Trackster linking
+  // step 2: linking Tracksters EM -> HAD, at lastLayerEE
   std::vector<unsigned> tsNearAtInt[tracksters.size()] = {};
   int tsMask2[tracksters.size()] = {0};
 
@@ -337,7 +342,7 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
 
   } // tsPropIntColl
 
-  // step 1: Linking Tracksters CE-H -> CE-H
+  // step 1: Linking Tracksters HAD -> HAD, at lastLayerEE
   std::vector<unsigned> tsHadNearAtInt[tracksters.size()] = {};
   int tsMask1[tracksters.size()] = {0};
 
@@ -392,9 +397,23 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
 
   // make final collections
 
+  std::vector<TICLCandidate> chargedCandidates;
+  std::vector<TICLCandidate> chargedHadronsFromTk;
   int chargedMask[tracksters.size()] = {0};
   for (unsigned i = 0; i < tracks.size(); ++i) {
-    if (tracksters_near[i].empty() && tsNearTkAtInt[i].empty()) continue; // nothing linked to track
+    if (tracksters_near[i].empty() && tsNearTkAtInt[i].empty()) { // nothing linked to track, make charged hadrons
+      TICLCandidate chargedHad;
+      const auto& tk = tracks[i];
+      chargedHad.setCharge(tk.charge());
+      chargedHad.setPdgId(211 * tk.charge());
+      chargedHad.setTrackPtr(edm::Ptr<reco::Track>(tkH, i));
+      float energy = std::sqrt(tk.p() * tk.p() + mpion2);
+      chargedHad.setRawEnergy(energy);
+      math::PtEtaPhiMLorentzVector p4Polar(tk.pt(), tk.eta(), tk.phi(), mpion);
+      chargedHad.setP4(p4Polar);
+      chargedHadronsFromTk.push_back(chargedHad);
+      continue;
+    }
 
     TICLCandidate chargedCandidate;
     for (const unsigned ts3_idx : tracksters_near[i]) { // tk -> ts
@@ -422,7 +441,7 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
       }
     }
 
-    for (const unsigned ts4_idx : tsNearTkAtInt[i]) { // do the same for ts -> ts links at the interface
+    for (const unsigned ts4_idx : tsNearTkAtInt[i]) { // do the same for tk -> ts links at the interface
       if (!chargedMask[ts4_idx]) {
         chargedCandidate.addTrackster(edm::Ptr<Trackster>(tsH, ts4_idx));
         chargedMask[ts4_idx] = 1;
@@ -451,7 +470,19 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
     // can happen if all the tracksters linked to that track were already masked
     if (chargedCandidate.tracksters().size() > 0) {
       chargedCandidate.setTrackPtr(edm::Ptr<reco::Track>(tkH, i));
-      resultLinked.push_back(chargedCandidate);
+      chargedCandidates.push_back(chargedCandidate);
+    }
+    else { // create charged hadron 
+      TICLCandidate chargedHad;
+      const auto& tk = tracks[i];
+      chargedHad.setCharge(tk.charge());
+      chargedHad.setPdgId(211 * tk.charge());
+      chargedHad.setTrackPtr(edm::Ptr<reco::Track>(tkH, i));
+      float energy = std::sqrt(tk.p() * tk.p() + mpion2);
+      chargedHad.setRawEnergy(energy);
+      math::PtEtaPhiMLorentzVector p4Polar(tk.pt(), tk.eta(), tk.phi(), mpion);
+      chargedHad.setP4(p4Polar);
+      chargedHadronsFromTk.push_back(chargedHad);
     }
   }
 
@@ -495,11 +526,86 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
         neutralMask[ts1_idx] = 1;
       }
     }
-    neutralCandidates.push_back(neutralCandidate);
+    // filter empty candidates
+    if (neutralCandidate.tracksters().size() > 0) {
+      neutralCandidates.push_back(neutralCandidate);
+    }
     }
   }
   
+// set other attributes of created candidates
+for (auto &cand : chargedCandidates) {
+  bool isHAD = false;
+  double rawE = 0.;
+  const auto track = cand.trackPtr();
+  for (const auto ts : cand.tracksters()) {
+    // isHAD if atleast one trackster is not EM
+    if (filter_on_pids(*ts)) isHAD = true;
+    rawE += ts->raw_energy();
+  }
+  
+  if (isHAD) { // charged hadron
+    cand.setCharge(track->charge());
+    cand.setPdgId(211 * track->charge());
+    cand.setRawEnergy(rawE);
+    math::XYZTLorentzVector p4(rawE * track->momentum().unit().x(),
+                               rawE * track->momentum().unit().y(),
+                               rawE * track->momentum().unit().z(),
+                               rawE);
+    cand.setP4(p4);
+  }
+  else { // electron
+    cand.setCharge(track->charge());
+    cand.setPdgId(11 * track->charge());
+    cand.setRawEnergy(rawE);
+    math::XYZTLorentzVector p4(rawE * track->momentum().unit().x(),
+                               rawE * track->momentum().unit().y(),
+                               rawE * track->momentum().unit().z(),
+                               rawE);
+    cand.setP4(p4);
+  }
+}
+
+for (auto &cand : neutralCandidates) {
+  bool isHAD = false;
+  double rawE = 0.;
+  const auto track = cand.trackPtr();
+  double wtSum_baryc[3] = {0};
+  for (const auto ts : cand.tracksters()) {
+    if (filter_on_pids(*ts)) isHAD = true;
+    rawE += ts->raw_energy();
+    wtSum_baryc[0] += (ts->raw_energy())*(ts->barycenter().x());
+    wtSum_baryc[1] += (ts->raw_energy())*(ts->barycenter().y());
+    wtSum_baryc[2] += (ts->raw_energy())*(ts->barycenter().z());
+  }
+  Vector combined_baryc(wtSum_baryc[0]/rawE, wtSum_baryc[1]/rawE, wtSum_baryc[2]/rawE);
+
+if (isHAD) { // neutral hadron
+  cand.setCharge(0);
+  cand.setPdgId(130);
+  cand.setRawEnergy(rawE);
+  float momentum = std::sqrt(rawE * rawE - mpion2);
+  math::XYZTLorentzVector p4(momentum * combined_baryc.unit().x(),
+                             momentum * combined_baryc.unit().y(),
+                             momentum * combined_baryc.unit().z(),
+                             rawE);
+  cand.setP4(p4);
+}
+else { // photon
+  cand.setCharge(0);
+  cand.setPdgId(22);
+  cand.setRawEnergy(rawE);
+  math::XYZTLorentzVector p4(rawE * combined_baryc.unit().x(),
+                             rawE * combined_baryc.unit().y(),
+                             rawE * combined_baryc.unit().z(),
+                             rawE);
+  cand.setP4(p4);
+}
+}
+
 resultLinked.insert(std::end(resultLinked), std::begin(neutralCandidates), std::end(neutralCandidates));
+resultLinked.insert(std::end(resultLinked), std::begin(chargedCandidates), std::end(chargedCandidates));
+resultLinked.insert(std::end(resultLinked), std::begin(chargedHadronsFromTk), std::end(chargedHadronsFromTk));
 
 }  // linkTracksters
 

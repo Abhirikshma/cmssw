@@ -399,7 +399,7 @@ void TrackstersMergeProducer::produce(edm::Event &evt, const edm::EventSetup &es
     auto track_ptr = cand.trackPtr();
     auto trackster_ptrs = cand.tracksters();
     auto track_idx = track_ptr.get() - (edm::Ptr<reco::Track>(track_h, 0)).get();
-    track_idx = (track_ptr.isNull()) ? 9999 : track_idx;
+    track_idx = (track_ptr.isNull()) ? -1 : track_idx;
     std::cout << "track id : " << track_idx << " trackster ids : ";
     for (auto ts_ptr : trackster_ptrs) {
       auto ts_idx = ts_ptr.get() - (edm::Ptr<ticl::Trackster>(trackstersMergedHandle, 0)).get();
