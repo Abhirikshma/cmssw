@@ -40,10 +40,9 @@ namespace ticl {
                     const edm::ESHandle<MagneticField> bfieldH,
                     const edm::ESHandle<Propagator> propH) override;
 
-    void linkTracksters(const std::vector<reco::Track> &,
-                        const edm::Handle<std::vector<reco::Track>>,
+    void linkTracksters(const edm::Handle<std::vector<reco::Track>>,
                         const StringCutObjectSelector<reco::Track>,
-                        const edm::OrphanHandle<std::vector<Trackster>>,
+                        const edm::Handle<std::vector<Trackster>>,
                         std::vector<TICLCandidate> &) override;
 
     static void fillPSetDescription(edm::ParameterSetDescription &desc);

@@ -35,6 +35,13 @@ math::XYZVector LinkingAlgoByPCAGeometric::propagateTrackster(
   Vector baryc = t.barycenter();
   Vector directnv = t.eigenvectors(0);
 
+  // barycenter as direction for tracksters w/ poor PCA
+  // propagation still done to get the cartesian coords
+  // which are anyway converted to eta, phi in linking
+  // -> can be simplified later
+  if (t.eigenvalues()[0]/t.eigenvalues()[1] < 20)
+    directnv = baryc.unit();
+
   assert(abs(directnv.Z()) > 0.00001);
 
   zVal *= (baryc.Z() > 0) ? 1 : -1;
@@ -77,10 +84,9 @@ void LinkingAlgoByPCAGeometric::buildLayers() {
   }
 }
 
-void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &tracks,
-                                               const edm::Handle<std::vector<reco::Track>> tkH,
+void LinkingAlgoByPCAGeometric::linkTracksters(const edm::Handle<std::vector<reco::Track>> tkH,
                                                const StringCutObjectSelector<reco::Track> cutTk,
-                                               const edm::OrphanHandle<std::vector<Trackster>> tsH,
+                                               const edm::Handle<std::vector<Trackster>> tsH,
                                                std::vector<TICLCandidate> &resultLinked) {
   // Selections based on CaloParticles or energy have to be implemented outside
 
@@ -92,15 +98,15 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
   const double del_ts = 0.02;  // trackster CE-E -> CE-H
   const double del_tsHad = 0.02; // CE-H -> CE-H 
 
-  const auto tracksters = *tsH;
+  const auto &tracks = *tkH;
+  const auto &tracksters = *tsH;
   auto bFieldProd = bfield_.product();
   const Propagator &prop = (*propagator_);
 
   // propagated point collections
   // elements in the propagated points collecions are used
   // to look for potential linkages in the appropriate tiles
-  std::vector<std::pair<std::pair<Vector, Vector>, unsigned>>
-      trackPColl;  // propagated track points, errors and index of track in collection
+  std::vector<std::pair<Vector, unsigned>> trackPColl;  // propagated track points and index of track in collection
   std::vector<std::pair<Vector, unsigned>> tkPropIntColl; // tracks propagated to lastLayerEE
   std::vector<std::pair<Vector, unsigned>> tsPropIntColl; // Tracksters in CE-E, propagated to lastLayerEE
   std::vector<std::pair<Vector, unsigned>> tsHadPropIntColl; // Tracksters in CE-H, propagated to lastLayerEE
@@ -140,19 +146,15 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
     TrajectoryStateOnSurface tsos = prop.propagate(fts, firstDisk_[iSide]->surface());
     if (tsos.isValid()) {
       Vector trackP(tsos.globalPosition().x(), tsos.globalPosition().y(), tsos.globalPosition().z());
-      Vector tkP_momentum(tsos.globalMomentum().x(), tsos.globalMomentum().y(), tsos.globalMomentum().z());
-      double x_err = pow(tsos.localError().positionError().xx(), 0.5);
-      double y_err = pow(tsos.localError().positionError().yy(), 0.5);
-      Vector track_err(x_err, y_err, 0.0);
 
-      trackPColl.push_back(std::make_pair(std::make_pair(trackP, track_err), i));
+      trackPColl.emplace_back(trackP, i);
     }
     // to lastLayerEE
     tsos = prop.propagate(fts, interfaceDisk_[iSide]->surface());
     if (tsos.isValid()) {
       Vector trackP(tsos.globalPosition().x(), tsos.globalPosition().y(), tsos.globalPosition().z());
 
-      tkPropIntColl.push_back(std::make_pair(trackP, i));
+      tkPropIntColl.emplace_back(trackP, i);
     }
   }  // Tracks
 
@@ -173,10 +175,10 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
     tsP = propagateTrackster(t, i, zVal, tsPropIntTiles);
 
     if (!filter_on_pids(t)) // EM tracksters
-      tsPropIntColl.push_back(std::make_pair(tsP, i));
+      tsPropIntColl.emplace_back(tsP, i);
     else { // HAD
       tsHadPropIntTiles[(t.barycenter().Z() > 0) ? 1:0].fill(tsP.Eta(), tsP.Phi(), i);
-      tsHadPropIntColl.push_back(std::make_pair(tsP, i));
+      tsHadPropIntColl.emplace_back(tsP, i);
     }
   }  // TS
 
@@ -185,9 +187,8 @@ void LinkingAlgoByPCAGeometric::linkTracksters(const std::vector<reco::Track> &t
   std::vector<unsigned> tracksters_near[tracks.size()] = {}; // i-th element: vector of indices of tracksters 'linked' to track i
 
   for (auto i : trackPColl) {
-    auto trackP = i.first.first;
+    auto trackP = i.first;
     const unsigned tkId = i.second;
-    //auto track_err = i.first.second;
 
     double tk_eta = trackP.Eta();
     double tk_phi = trackP.Phi();
