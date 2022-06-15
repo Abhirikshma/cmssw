@@ -26,11 +26,22 @@
 #include "DataFormats/ForwardDetId/interface/HGCalDetId.h"
 #include "DataFormats/HepMCCandidate/interface/GenParticle.h"
 #include "DataFormats/HGCalReco/interface/Trackster.h"
+#include "DataFormats/HGCalReco/interface/TICLGraph.h"
+#include "DataFormats/HGCalReco/interface/TICLCandidate.h"
 #include "DataFormats/TrackReco/interface/Track.h"
 #include "DataFormats/Math/interface/deltaR.h"
 
 #include "RecoLocalCalo/HGCalRecAlgos/interface/RecHitTools.h"
 #include "SimDataFormats/CaloAnalysis/interface/CaloParticle.h"
+
+#include "SimCalorimetry/HGCalAssociatorProducers/interface/AssociatorTools.h"
+#include "SimDataFormats/Associations/interface/LayerClusterToCaloParticleAssociator.h"
+
+// TFileService
+#include "FWCore/ServiceRegistry/interface/Service.h"
+#include "CommonTools/UtilAlgos/interface/TFileService.h"
+
+#include "TTree.h"
 //
 // class declaration
 //
@@ -50,33 +61,72 @@ private:
   void endJob() override;
 
   const edm::InputTag trackstersMerge_;
+  const edm::InputTag trackstersClue3d_;
+  const edm::InputTag ticlGraph_;
+  const edm::InputTag ticlCandidates_;
   const edm::InputTag tracks_;
   const edm::InputTag caloParticles_;
   const edm::InputTag layerClusters_;
+  const edm::InputTag associatorRecoSim_;
+  const edm::InputTag associatorSimReco_;
   hgcal::RecHitTools rhtools_;
   edm::ESGetToken<CaloGeometry, CaloGeometryRecord> caloGeometry_token_;
   edm::EDGetTokenT<std::vector<ticl::Trackster>> trackstersMergeToken_;
+  edm::EDGetTokenT<std::vector<ticl::Trackster>> tracksters_clue3d_token_;
+  edm::EDGetTokenT<TICLGraph> ticlGraph_token_;
+  edm::EDGetTokenT<std::vector<TICLCandidate>> ticlCandidateToken_; 
   edm::EDGetTokenT<std::vector<reco::Track>> tracksToken_;
   edm::EDGetTokenT<std::vector<CaloParticle>> caloParticlesToken_;
   edm::EDGetTokenT<std::vector<reco::CaloCluster>> layerClustersToken_;
+  edm::EDGetTokenT<hgcal::RecoToSimCollectionSimTracksters> tsRecoToSimToken_;
+
+  TTree *tree_;
+
+  unsigned nTracksters;
+  std::vector<unsigned> indices;
+  std::vector<double> x;
+  std::vector<double> y;
+  std::vector<double> z;
+  std::vector<double> eta;
+  std::vector<double> phi;
+  std::vector<double> raw_E;
+  std::vector<double> raw_em_E;
+  std::vector<double> time;
+  std::vector<std::vector<unsigned>> linked_inners;
+  std::vector<std::vector<unsigned>> linked_outers;
+  std::vector<std::vector<unsigned>> tracksters_in_candidate;
+
+  std::vector<std::vector<unsigned>> tracksters_recoToSim;
+  std::vector<std::vector<unsigned>> tracksters_recoToSim_score;
+
 };
 
 TiclDebugger::TiclDebugger(const edm::ParameterSet& iConfig)
     : trackstersMerge_(iConfig.getParameter<edm::InputTag>("trackstersMerge")),
+      trackstersClue3d_(iConfig.getParameter<edm::InputTag>("trackstersClue3d")),
+      ticlGraph_(iConfig.getParameter<edm::InputTag>("ticlgraph")),
+      ticlCandidates_(iConfig.getParameter<edm::InputTag>("ticlcandidates")),
       tracks_(iConfig.getParameter<edm::InputTag>("tracks")),
       caloParticles_(iConfig.getParameter<edm::InputTag>("caloParticles")),
       layerClusters_(iConfig.getParameter<edm::InputTag>("layerClusters")),
+      associatorRecoSim_(iConfig.getParameter<edm::InputTag>("recoToSimAssociator")),
       caloGeometry_token_(esConsumes<CaloGeometry, CaloGeometryRecord, edm::Transition::BeginRun>()) {
   edm::ConsumesCollector&& iC = consumesCollector();
   trackstersMergeToken_ = iC.consumes<std::vector<ticl::Trackster>>(trackstersMerge_);
+  tracksters_clue3d_token_ = iC.consumes<std::vector<ticl::Trackster>>(trackstersClue3d_);
+  ticlGraph_token_ = iC.consumes<TICLGraph>(ticlGraph_);
+  ticlCandidateToken_ = iC.consumes<std::vector<TICLCandidate>>(ticlCandidates_);
   tracksToken_ = iC.consumes<std::vector<reco::Track>>(tracks_);
   caloParticlesToken_ = iC.consumes<std::vector<CaloParticle>>(caloParticles_);
   layerClustersToken_ = iC.consumes<std::vector<reco::CaloCluster>>(layerClusters_);
+  tsRecoToSimToken_ = iC.consumes<hgcal::RecoToSimCollectionSimTracksters>(associatorRecoSim_);
+  
 }
 
 TiclDebugger::~TiclDebugger() {}
 
 void TiclDebugger::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup) {
+  std::cout << "begin analyze" <<std::endl;
   static const char* particle_kind[] = {"gam", "e", "mu", "pi0", "h", "h0", "?", "!"};
   using namespace edm;
   using std::begin;
@@ -94,6 +144,18 @@ void TiclDebugger::analyze(const edm::Event& iEvent, const edm::EventSetup& iSet
     return tracksters[i].raw_energy() > tracksters[j].raw_energy();
   });
 
+  edm::Handle<std::vector<ticl::Trackster>> trackstersclue3dH;
+  iEvent.getByToken(tracksters_clue3d_token_, trackstersclue3dH);
+  auto const& trackstersclue3d = *trackstersclue3dH.product();
+
+  edm::Handle<TICLGraph> ticlGraphH;
+  iEvent.getByToken(ticlGraph_token_, ticlGraphH);
+  const auto& ticlGraph = *ticlGraphH.product();
+
+  edm::Handle<std::vector<TICLCandidate>> ticlCandidateH;
+  iEvent.getByToken(ticlCandidateToken_, ticlCandidateH);
+  const auto& ticlCandidates = *ticlCandidateH.product();
+
   edm::Handle<std::vector<reco::CaloCluster>> layerClustersH;
   iEvent.getByToken(layerClustersToken_, layerClustersH);
   auto const& layerClusters = *layerClustersH.product();
@@ -106,6 +168,75 @@ void TiclDebugger::analyze(const edm::Event& iEvent, const edm::EventSetup& iSet
   iEvent.getByToken(caloParticlesToken_, caloParticlesH);
   auto const& caloParticles = *caloParticlesH.product();
   std::vector<std::pair<int, float>> bestCPMatches;
+
+  edm::Handle<hgcal::RecoToSimCollectionSimTracksters> tsRecoToSimH;
+  iEvent.getByToken(tsRecoToSimToken_, tsRecoToSimH);
+  auto const& tsRecoSimMap = *tsRecoToSimH;
+
+  nTracksters = 0;
+  indices.clear();
+  x.clear();
+  y.clear();
+  z.clear();
+  eta.clear();
+  phi.clear();
+  raw_E.clear();
+  raw_em_E.clear();
+  time.clear();
+  linked_inners.clear();
+  linked_outers.clear();
+  tracksters_in_candidate.clear();
+
+  nTracksters = trackstersclue3d.size();
+  linked_inners.resize(nTracksters);
+  linked_outers.resize(nTracksters);
+  tracksters_recoToSim.resize(nTracksters);
+  tracksters_recoToSim_score.resize(nTracksters, -1.);
+  for (unsigned i = 0; i < nTracksters; ++i) {
+    std::cout << i << std::endl;
+    const auto &t = trackstersclue3d[i];
+    indices.push_back(i);
+    const auto &barycenter = t.barycenter();
+    x.push_back(barycenter.x());
+    y.push_back(barycenter.y());
+    z.push_back(barycenter.z());
+    eta.push_back(barycenter.eta());
+    phi.push_back(barycenter.phi());
+    raw_E.push_back(t.raw_energy());
+    raw_em_E.push_back(t.raw_em_energy());
+    time.push_back(t.time());
+
+    // TICLGraph
+    const auto& node = ticlGraph.getNode((int) i);
+    auto this_inners = node.getInner();
+    auto this_outers = node.getOuter();
+    linked_inners[i].insert(linked_inners[i].end(), this_inners.begin(), this_inners.end());
+    linked_outers[i].insert(linked_outers[i].end(), this_outers.begin(), this_outers.end());
+
+    // Associations
+    const edm::Ref<ticl::Trackster> tsRef(trackstersclue3dH, i);
+    const auto& stsAssociated = tsRecoSimMap.find(tsRef);
+
+    if (stsAssociated == tsRecoSimMap.end()) continue; // no matches
+    for (auto &sts : stsAssociated) {
+      std::cout << sts.first << " " << sts.second << "  ";
+      tracksters_recoToSim[i].push_back(sts.first);
+      tracksters_recoToSim_score[i].push_back(sts.second);  
+    }
+  }
+
+  unsigned nCandidates = ticlCandidates.size();
+  tracksters_in_candidate.resize(nCandidates);
+  for (unsigned i = 0; i < nCandidates; ++i) {
+    const auto &c = ticlCandidates[i];
+    auto trackster_ptrs = c.tracksters();
+    for (auto ts_ptr : trackster_ptrs) {
+      unsigned ts_idx = ts_ptr.get() - (edm::Ptr<ticl::Trackster>(trackstersclue3dH, 0)).get();
+      tracksters_in_candidate[i].push_back(ts_idx);
+    }
+  }
+
+  tree_->Fill();
 
   auto bestCaloParticleMatches = [&](const ticl::Trackster& t) -> void {
     bestCPMatches.clear();
@@ -215,7 +346,25 @@ void TiclDebugger::beginRun(edm::Run const&, edm::EventSetup const& es) {
   rhtools_.setGeometry(geom);
 }
 
-void TiclDebugger::beginJob() {}
+void TiclDebugger::beginJob() {
+  edm::Service<TFileService> fs;
+  tree_ = fs->make<TTree>("EventTree", "Event Data");
+  std::cout << "made tree" <<std::endl;
+
+  tree_->Branch("Trackster_N", &nTracksters);
+  tree_->Branch("indices", &indices);
+  tree_->Branch("x", &x);
+  tree_->Branch("y", &y);
+  tree_->Branch("z", &z);
+  tree_->Branch("eta", &eta);
+  tree_->Branch("phi", &phi);
+  tree_->Branch("raw_energy", &raw_E);
+  tree_->Branch("raw_em_energy", &raw_em_E);
+  tree_->Branch("time", &time);
+  tree_->Branch("linked_inners", &linked_inners);
+  tree_->Branch("linked_outers", &linked_outers);
+  tree_->Branch("tracksters_in_candidate", &tracksters_in_candidate);
+}
 
 void TiclDebugger::endJob() {}
 
@@ -223,9 +372,13 @@ void TiclDebugger::endJob() {}
 void TiclDebugger::fillDescriptions(edm::ConfigurationDescriptions& descriptions) {
   edm::ParameterSetDescription desc;
   desc.add<edm::InputTag>("trackstersMerge", edm::InputTag("ticlTrackstersMerge"));
+  desc.add<edm::InputTag>("trackstersClue3d", edm::InputTag("ticlTrackstersCLUE3DHigh"));
+  desc.add<edm::InputTag>("ticlgraph", edm::InputTag("ticlGraph"));
+  desc.add<edm::InputTag>("ticlcandidates", edm::InputTag("ticlTrackstersMerge"));
   desc.add<edm::InputTag>("tracks", edm::InputTag("generalTracks"));
   desc.add<edm::InputTag>("caloParticles", edm::InputTag("mix", "MergedCaloTruth"));
   desc.add<edm::InputTag>("layerClusters", edm::InputTag("hgcalLayerClusters"));
+  desc.add<edm::InputTag>("recoToSimAssociator", edm::InputTag("tracksterSimTracksterAssociationPR"));
   descriptions.add("ticlDebugger", desc);
 }
 
