@@ -7,5 +7,6 @@
 <use name="RecoLocalCalo/HGCalRecAlgos"/>
 <use name="PhysicsTools/UtilAlgos"/>
 <use name="FWCore/ServiceRegistry"/>
+<use name="SimDataFormats/Associations"/>
 <flags EDM_PLUGIN="1"/>
 <library   file="*.cc" name="testRecoHGCalTICL"> </library>

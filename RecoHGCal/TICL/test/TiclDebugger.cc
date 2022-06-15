@@ -167,6 +167,7 @@ void TiclDebugger::analyze(const edm::Event& iEvent, const edm::EventSetup& iSet
   edm::Handle<std::vector<CaloParticle>> caloParticlesH;
   iEvent.getByToken(caloParticlesToken_, caloParticlesH);
   auto const& caloParticles = *caloParticlesH.product();
+
   std::vector<std::pair<int, float>> bestCPMatches;
 
   edm::Handle<hgcal::RecoToSimCollectionSimTracksters> tsRecoToSimH;
