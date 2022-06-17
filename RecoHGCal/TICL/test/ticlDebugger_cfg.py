@@ -8,12 +8,12 @@ process.load('Configuration.StandardSequences.FrontierConditions_GlobalTag_cff')
 from Configuration.AlCa.GlobalTag import GlobalTag
 process.GlobalTag = GlobalTag(process.GlobalTag, 'auto:phase2_realistic_T15', '')
 
-process.maxEvents = cms.untracked.PSet( input = cms.untracked.int32(1) )
+process.maxEvents = cms.untracked.PSet( input = cms.untracked.int32(-1) )
 
 process.source = cms.Source("PoolSource",
     # replace 'myfile.root' with the source file you want to use
     fileNames = cms.untracked.vstring(
-        'file:step3.root'
+        'file:34688.0_SinglePiPt25Eta1p7_2p7+2026D76+SinglePiPt25Eta1p7_2p7_GenSimHLBeamSpot+DigiTrigger+RecoGlobal+HARVESTGlobal/step3.root'
     )
 )
 
@@ -39,3 +39,7 @@ setattr(process.MessageLogger.files, label, messageLogger[main_key])
 
 process.p = cms.Path(process.ticlDebugger+process.caloParticleDebugger)
 
+process.TFileService = cms.Service("TFileService", 
+      fileName = cms.string("graphntuple.root"),
+      closeFileFast = cms.untracked.bool(True)
+  )

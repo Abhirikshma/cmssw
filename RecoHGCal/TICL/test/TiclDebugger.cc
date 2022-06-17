@@ -35,7 +35,7 @@
 #include "SimDataFormats/CaloAnalysis/interface/CaloParticle.h"
 
 #include "SimCalorimetry/HGCalAssociatorProducers/interface/AssociatorTools.h"
-#include "SimDataFormats/Associations/interface/LayerClusterToCaloParticleAssociator.h"
+#include "SimDataFormats/Associations/interface/TracksterToSimTracksterHitLCAssociator.h"
 
 // TFileService
 #include "FWCore/ServiceRegistry/interface/Service.h"
@@ -62,6 +62,7 @@ private:
 
   const edm::InputTag trackstersMerge_;
   const edm::InputTag trackstersClue3d_;
+  const edm::InputTag simtracksters_;
   const edm::InputTag ticlGraph_;
   const edm::InputTag ticlCandidates_;
   const edm::InputTag tracks_;
@@ -73,16 +74,19 @@ private:
   edm::ESGetToken<CaloGeometry, CaloGeometryRecord> caloGeometry_token_;
   edm::EDGetTokenT<std::vector<ticl::Trackster>> trackstersMergeToken_;
   edm::EDGetTokenT<std::vector<ticl::Trackster>> tracksters_clue3d_token_;
+  edm::EDGetTokenT<std::vector<ticl::Trackster>> simtracksters_token_;
   edm::EDGetTokenT<TICLGraph> ticlGraph_token_;
   edm::EDGetTokenT<std::vector<TICLCandidate>> ticlCandidateToken_; 
   edm::EDGetTokenT<std::vector<reco::Track>> tracksToken_;
   edm::EDGetTokenT<std::vector<CaloParticle>> caloParticlesToken_;
   edm::EDGetTokenT<std::vector<reco::CaloCluster>> layerClustersToken_;
   edm::EDGetTokenT<hgcal::RecoToSimCollectionSimTracksters> tsRecoToSimToken_;
+  edm::EDGetTokenT<hgcal::SimToRecoCollectionSimTracksters> tsSimToRecoToken_;
 
   TTree *tree_;
 
   unsigned nTracksters;
+  unsigned nSimTracksters_SC;
   std::vector<unsigned> indices;
   std::vector<double> x;
   std::vector<double> y;
@@ -97,30 +101,37 @@ private:
   std::vector<std::vector<unsigned>> tracksters_in_candidate;
 
   std::vector<std::vector<unsigned>> tracksters_recoToSim;
-  std::vector<std::vector<unsigned>> tracksters_recoToSim_score;
+  std::vector<std::vector<double>> tracksters_recoToSim_score;
+
+  std::vector<std::vector<unsigned>> tracksters_simToReco;
+  std::vector<std::vector<double>> tracksters_simToReco_score;
+  std::vector<std::vector<double>> tracksters_simToReco_sharedE;
 
 };
 
 TiclDebugger::TiclDebugger(const edm::ParameterSet& iConfig)
     : trackstersMerge_(iConfig.getParameter<edm::InputTag>("trackstersMerge")),
       trackstersClue3d_(iConfig.getParameter<edm::InputTag>("trackstersClue3d")),
+      simtracksters_(iConfig.getParameter<edm::InputTag>("simtracksters")),
       ticlGraph_(iConfig.getParameter<edm::InputTag>("ticlgraph")),
       ticlCandidates_(iConfig.getParameter<edm::InputTag>("ticlcandidates")),
       tracks_(iConfig.getParameter<edm::InputTag>("tracks")),
       caloParticles_(iConfig.getParameter<edm::InputTag>("caloParticles")),
       layerClusters_(iConfig.getParameter<edm::InputTag>("layerClusters")),
       associatorRecoSim_(iConfig.getParameter<edm::InputTag>("recoToSimAssociator")),
+      associatorSimReco_(iConfig.getParameter<edm::InputTag>("simToRecoAssociator")),
       caloGeometry_token_(esConsumes<CaloGeometry, CaloGeometryRecord, edm::Transition::BeginRun>()) {
   edm::ConsumesCollector&& iC = consumesCollector();
   trackstersMergeToken_ = iC.consumes<std::vector<ticl::Trackster>>(trackstersMerge_);
   tracksters_clue3d_token_ = iC.consumes<std::vector<ticl::Trackster>>(trackstersClue3d_);
+  simtracksters_token_ = iC.consumes<std::vector<ticl::Trackster>>(simtracksters_);
   ticlGraph_token_ = iC.consumes<TICLGraph>(ticlGraph_);
   ticlCandidateToken_ = iC.consumes<std::vector<TICLCandidate>>(ticlCandidates_);
   tracksToken_ = iC.consumes<std::vector<reco::Track>>(tracks_);
   caloParticlesToken_ = iC.consumes<std::vector<CaloParticle>>(caloParticles_);
   layerClustersToken_ = iC.consumes<std::vector<reco::CaloCluster>>(layerClusters_);
   tsRecoToSimToken_ = iC.consumes<hgcal::RecoToSimCollectionSimTracksters>(associatorRecoSim_);
-  
+  tsSimToRecoToken_ = iC.consumes<hgcal::SimToRecoCollectionSimTracksters>(associatorSimReco_);
 }
 
 TiclDebugger::~TiclDebugger() {}
@@ -148,6 +159,10 @@ void TiclDebugger::analyze(const edm::Event& iEvent, const edm::EventSetup& iSet
   iEvent.getByToken(tracksters_clue3d_token_, trackstersclue3dH);
   auto const& trackstersclue3d = *trackstersclue3dH.product();
 
+  edm::Handle<std::vector<ticl::Trackster>> simtrackstersH;
+  iEvent.getByToken(simtracksters_token_, simtrackstersH);
+  auto const& simTracksters_SC = *simtrackstersH.product();
+
   edm::Handle<TICLGraph> ticlGraphH;
   iEvent.getByToken(ticlGraph_token_, ticlGraphH);
   const auto& ticlGraph = *ticlGraphH.product();
@@ -174,6 +189,10 @@ void TiclDebugger::analyze(const edm::Event& iEvent, const edm::EventSetup& iSet
   iEvent.getByToken(tsRecoToSimToken_, tsRecoToSimH);
   auto const& tsRecoSimMap = *tsRecoToSimH;
 
+  edm::Handle<hgcal::SimToRecoCollectionSimTracksters> tsSimToRecoH;
+  iEvent.getByToken(tsSimToRecoToken_, tsSimToRecoH);
+  auto const& tsSimRecoMap = *tsSimToRecoH;
+
   nTracksters = 0;
   indices.clear();
   x.clear();
@@ -187,14 +206,21 @@ void TiclDebugger::analyze(const edm::Event& iEvent, const edm::EventSetup& iSet
   linked_inners.clear();
   linked_outers.clear();
   tracksters_in_candidate.clear();
+  tracksters_recoToSim.clear();
+  tracksters_recoToSim_score.clear();
+  tracksters_simToReco.clear();
+  tracksters_simToReco_score.clear();
+  tracksters_simToReco_sharedE.clear();
+  nSimTracksters_SC = 0;
 
   nTracksters = trackstersclue3d.size();
+  nSimTracksters_SC = simTracksters_SC.size();
   linked_inners.resize(nTracksters);
   linked_outers.resize(nTracksters);
   tracksters_recoToSim.resize(nTracksters);
-  tracksters_recoToSim_score.resize(nTracksters, -1.);
+  tracksters_recoToSim_score.resize(nTracksters);
   for (unsigned i = 0; i < nTracksters; ++i) {
-    std::cout << i << std::endl;
+    std::cout << "trackster " << i << std::endl;
     const auto &t = trackstersclue3d[i];
     indices.push_back(i);
     const auto &barycenter = t.barycenter();
@@ -215,15 +241,45 @@ void TiclDebugger::analyze(const edm::Event& iEvent, const edm::EventSetup& iSet
     linked_outers[i].insert(linked_outers[i].end(), this_outers.begin(), this_outers.end());
 
     // Associations
-    const edm::Ref<ticl::Trackster> tsRef(trackstersclue3dH, i);
-    const auto& stsAssociated = tsRecoSimMap.find(tsRef);
+    const edm::Ref<ticl::TracksterCollection> tsRef(trackstersclue3dH, i);
+    const auto& stsAssociatedIter = tsRecoSimMap.find(tsRef);
 
-    if (stsAssociated == tsRecoSimMap.end()) continue; // no matches
+    if (stsAssociatedIter == tsRecoSimMap.end()) { // no matches
+      std::cout << "no matches" << std::endl;
+      continue;
+    }
+    const auto& stsAssociated = stsAssociatedIter->val;
     for (auto &sts : stsAssociated) {
-      std::cout << sts.first << " " << sts.second << "  ";
-      tracksters_recoToSim[i].push_back(sts.first);
+      auto sts_id = (sts.first).get() - (edm::Ref<ticl::TracksterCollection>(simtrackstersH, 0)).get();
+      std::cout << "sts " << sts_id << " score " << sts.second << std::endl;
+      tracksters_recoToSim[i].push_back(sts_id);
       tracksters_recoToSim_score[i].push_back(sts.second);  
     }
+  }
+
+  tracksters_simToReco.resize(nSimTracksters_SC);
+  tracksters_simToReco_score.resize(nSimTracksters_SC);
+  tracksters_simToReco_sharedE.resize(nSimTracksters_SC);
+  for (unsigned i = 0; i < simTracksters_SC.size(); ++i) {
+    const edm::Ref<ticl::TracksterCollection> stsRef(simtrackstersH, i);
+    const auto& tsAssociatedIter = tsSimRecoMap.find(stsRef);
+    std::cout <<  "sim-reco sts " << i << " ts: "; 
+
+    if (tsAssociatedIter == tsSimRecoMap.end()) {
+      std::cout << "no sim-reco matches" << std::endl;
+      continue;
+    }
+    const auto& tsAssociated = tsAssociatedIter->val;
+    for (auto& ts : tsAssociated) {
+      auto ts_id = (ts.first).get() - (edm::Ref<ticl::TracksterCollection>(trackstersclue3dH, 0)).get();
+      auto score = ts.second.second;
+      auto sharedEnergy = ts.second.first;
+      std::cout <<  ts_id << " score " << score << " sharedE " << sharedEnergy << "  ";
+      tracksters_simToReco[i].push_back(ts_id);
+      tracksters_simToReco_score[i].push_back(score);
+      tracksters_simToReco_sharedE[i].push_back(sharedEnergy);
+    } 
+    std::cout << std::endl;
   }
 
   unsigned nCandidates = ticlCandidates.size();
@@ -365,6 +421,12 @@ void TiclDebugger::beginJob() {
   tree_->Branch("linked_inners", &linked_inners);
   tree_->Branch("linked_outers", &linked_outers);
   tree_->Branch("tracksters_in_candidate", &tracksters_in_candidate);
+  tree_->Branch("tracksters_recoToSimAssociations", &tracksters_recoToSim);
+  tree_->Branch("tracksters_recoToSimScore", &tracksters_recoToSim_score);
+  tree_->Branch("tracksters_simToRecoAssociations", &tracksters_simToReco);
+  tree_->Branch("tracksters_simToRecoScore", &tracksters_simToReco_score);
+  tree_->Branch("tracksters_simToRecoSharedEnergy", &tracksters_simToReco_sharedE);
+  tree_->Branch("SimTracksters_SC_N", &nSimTracksters_SC);
 }
 
 void TiclDebugger::endJob() {}
@@ -374,12 +436,14 @@ void TiclDebugger::fillDescriptions(edm::ConfigurationDescriptions& descriptions
   edm::ParameterSetDescription desc;
   desc.add<edm::InputTag>("trackstersMerge", edm::InputTag("ticlTrackstersMerge"));
   desc.add<edm::InputTag>("trackstersClue3d", edm::InputTag("ticlTrackstersCLUE3DHigh"));
+  desc.add<edm::InputTag>("simtracksters", edm::InputTag("ticlSimTracksters"));
   desc.add<edm::InputTag>("ticlgraph", edm::InputTag("ticlGraph"));
   desc.add<edm::InputTag>("ticlcandidates", edm::InputTag("ticlTrackstersMerge"));
   desc.add<edm::InputTag>("tracks", edm::InputTag("generalTracks"));
   desc.add<edm::InputTag>("caloParticles", edm::InputTag("mix", "MergedCaloTruth"));
   desc.add<edm::InputTag>("layerClusters", edm::InputTag("hgcalLayerClusters"));
-  desc.add<edm::InputTag>("recoToSimAssociator", edm::InputTag("tracksterSimTracksterAssociationPR"));
+  desc.add<edm::InputTag>("recoToSimAssociator", edm::InputTag("tracksterSimTracksterAssociationPRbyCLUE3D"));
+  desc.add<edm::InputTag>("simToRecoAssociator", edm::InputTag("tracksterSimTracksterAssociationPRbyCLUE3D"));
   descriptions.add("ticlDebugger", desc);
 }
 
