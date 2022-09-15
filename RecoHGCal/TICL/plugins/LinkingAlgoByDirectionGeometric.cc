@@ -163,7 +163,7 @@ bool LinkingAlgoByDirectionGeometric::timeAndEnergyCompatible(float &total_raw_e
       LogDebug("LinkingAlgoByDirectionGeometric") << "time incompatible : track time " << tkT << " +/- " << tkTErr
                                                   << " trackster time " << tsT << " +/- " << tsTErr << "\n";
   }
-  return energyCompatible && timeCompatible;
+  return energyCompatible and timeCompatible;
 }
 
 void LinkingAlgoByDirectionGeometric::recordTrackster(const unsigned ts,  //trackster index
@@ -380,7 +380,7 @@ void LinkingAlgoByDirectionGeometric::linkTracksters(const edm::Handle<std::vect
   std::vector<TICLCandidate> chargedCandidates;
   std::vector<unsigned int> chargedMask(tracksters.size(), 0);
   for (unsigned &i : candidateTrackIds) {
-    if (tsNearTk[i].empty() && tsNearTkAtInt[i].empty()) {  // nothing linked to track, make charged hadrons
+    if (tsNearTk[i].empty() and tsNearTkAtInt[i].empty()) {  // nothing linked to track, make charged hadrons
       TICLCandidate chargedHad;
       chargedHad.setTrackPtr(edm::Ptr<reco::Track>(tkH, i));
       chargedHadronsFromTk.push_back(chargedHad);
@@ -459,48 +459,40 @@ void LinkingAlgoByDirectionGeometric::linkTracksters(const edm::Handle<std::vect
   std::vector<TICLCandidate> neutralCandidates;
   std::vector<int> neutralMask(tracksters.size(), 0);
   for (unsigned i = 0; i < tracksters.size(); ++i) {
-    if (chargedMask[i])
+    if (chargedMask[i] or neutralMask[i])
       continue;
 
     TICLCandidate neutralCandidate;
-    if (tsNearAtInt[i].empty() && tsHadNearAtInt[i].empty() && !neutralMask[i]) {  // nothing linked to this ts
+    if (tsNearAtInt[i].empty() and tsHadNearAtInt[i].empty()) {  // nothing linked to this ts
       neutralCandidate.addTrackster(edm::Ptr<Trackster>(tsH, i));
       neutralMask[i] = 1;
       neutralCandidates.push_back(neutralCandidate);
       continue;
     }
-    if (!neutralMask[i]) {
-      neutralCandidate.addTrackster(edm::Ptr<Trackster>(tsH, i));
-      neutralMask[i] = 1;
-    }
-    for (const unsigned ts2_idx : tsNearAtInt[i]) {
-      if (chargedMask[ts2_idx])
-        continue;
-      if (!neutralMask[ts2_idx]) {
+
+    neutralCandidate.addTrackster(edm::Ptr<Trackster>(tsH, i));
+    neutralMask[i] = 1;
+
+    for (const unsigned ts2_idx : tsNearAtInt[i]) {  // ts_EM -> ts_HAD
+      if (!neutralMask[ts2_idx] and !chargedMask[ts2_idx]) {
         neutralCandidate.addTrackster(edm::Ptr<Trackster>(tsH, ts2_idx));
         neutralMask[ts2_idx] = 1;
       }
-      for (const unsigned ts1_idx : tsHadNearAtInt[ts2_idx]) {
-        if (chargedMask[ts1_idx])
-          continue;
-        if (!neutralMask[ts1_idx]) {
+      for (const unsigned ts1_idx : tsHadNearAtInt[ts2_idx]) {  // ts_HAD -> ts_HAD
+        if (!neutralMask[ts1_idx] and !chargedMask[ts1_idx]) {
           neutralCandidate.addTrackster(edm::Ptr<Trackster>(tsH, ts1_idx));
           neutralMask[ts1_idx] = 1;
         }
       }
     }
     for (const unsigned ts1_idx : tsHadNearAtInt[i]) {
-      if (chargedMask[ts1_idx])
-        continue;
-      if (!neutralMask[ts1_idx]) {
+      if (!neutralMask[ts1_idx] and !chargedMask[ts1_idx]) {  // ts_HAD -> ts_HAD
         neutralCandidate.addTrackster(edm::Ptr<Trackster>(tsH, ts1_idx));
         neutralMask[ts1_idx] = 1;
       }
     }
-    // filter empty candidates
-    if (!neutralCandidate.tracksters().empty()) {
-      neutralCandidates.push_back(neutralCandidate);
-    }
+
+    neutralCandidates.push_back(neutralCandidate);
   }
 
   resultLinked.insert(std::end(resultLinked), std::begin(neutralCandidates), std::end(neutralCandidates));
