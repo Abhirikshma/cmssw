@@ -1,0 +1,12 @@
+<use name="DataFormats/TrackReco"/>
+<use name="SimDataFormats/TrackingAnalysis"/>
+<use name="SimDataFormats/Track"/>
+<use name="SimTracker/TrackAssociation"/>
+<use name="SimTracker/TrackerHitAssociation"/>
+<!-- <use name="CalibTracker/Records"/> -->
+<!-- <use name="TrackingTools/Records"/> -->
+<!-- <use name="Geometry/TrackerGeometryBuilder"/> -->
+<use name="FWCore/Framework"/>
+<use name="FWCore/ParameterSet"/>
+<use name="FWCore/PluginManager"/>
+<flags EDM_PLUGIN="1"/>
