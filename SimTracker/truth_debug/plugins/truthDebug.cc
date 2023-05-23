@@ -113,7 +113,6 @@ void truthDebug::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
   // Find match to track in reco to sim collection
   for (unsigned i = 0; i < trackCollection.size(); ++i) {
     edm::RefToBase<reco::Track> tk_i(trackCollectionH, i);
-    std::vector<std::pair<TrackingParticleRef, double>> tp;
 
     auto foundHere = tkToTpMap.find(tk_i); // check if track is in the map
     if (foundHere != tkToTpMap.end()) {
@@ -125,7 +124,9 @@ void truthDebug::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
         for (auto val_i : foundVal) {
           auto tp_i = val_i.first;
           double qual = val_i.second;
-          std::cout << "\t\tTP pT: " << (*tp_i).pt() << " quality " << qual << "\n";
+          std::cout << "\tTP pT: " << tp_i->pt() << " quality " << qual << " genpart status " << tp_i->status() << " pdg id: " << tp_i->pdgId() << std::endl;
+          std::cout << "\t\t parent TrackingVertex position (x, y, z): " << tp_i->vx() << ", " << tp_i->vy() << ", " << tp_i->vz() << std::endl;
+
         }
       }
       

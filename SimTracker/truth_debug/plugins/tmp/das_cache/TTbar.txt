@@ -1,0 +1,10 @@
+root://xrootd-cms.infn.it///store/relval/CMSSW_12_4_0_pre2/RelValTTbar_14TeV/FEVTDEBUGHLT/123X_upgrade2018_realistic_v2_v2-v1/2580000/7ced165c-05d4-4b35-9e96-d80644917499.root
+root://xrootd-cms.infn.it///store/relval/CMSSW_12_4_0_pre2/RelValTTbar_14TeV/FEVTDEBUGHLT/123X_upgrade2018_realistic_v2_v2-v1/2580000/bf925633-20cd-4f7d-818a-5b915965b9d0.root
+root://xrootd-cms.infn.it///store/relval/CMSSW_12_4_0_pre2/RelValTTbar_14TeV/FEVTDEBUGHLT/123X_upgrade2018_realistic_v2_v2-v1/2580000/f1c6d284-6395-405a-84dd-29432b8367c3.root
+root://xrootd-cms.infn.it///store/relval/CMSSW_12_4_0_pre2/RelValTTbar_14TeV/FEVTDEBUGHLT/123X_upgrade2018_realistic_v2_v2-v1/2580000/6170a5e4-7fce-4a68-a257-95c3d6d589ed.root
+root://xrootd-cms.infn.it///store/relval/CMSSW_12_4_0_pre2/RelValTTbar_14TeV/FEVTDEBUGHLT/123X_upgrade2018_realistic_v2_v2-v1/2580000/efb3ab4a-cace-4ae9-a494-914bda26b180.root
+root://xrootd-cms.infn.it///store/relval/CMSSW_12_4_0_pre2/RelValTTbar_14TeV/FEVTDEBUGHLT/123X_upgrade2018_realistic_v2_v2-v1/2580000/6a963f6a-8449-4e5b-8173-b0b9cb39d381.root
+root://xrootd-cms.infn.it///store/relval/CMSSW_12_4_0_pre2/RelValTTbar_14TeV/FEVTDEBUGHLT/123X_upgrade2018_realistic_v2_v2-v1/2580000/357fd6e2-8b38-4eb8-868d-1975e1290dd1.root
+root://xrootd-cms.infn.it///store/relval/CMSSW_12_4_0_pre2/RelValTTbar_14TeV/FEVTDEBUGHLT/123X_upgrade2018_realistic_v2_v2-v1/2580000/20a860f4-2321-449a-bf13-20669bc27fa6.root
+root://xrootd-cms.infn.it///store/relval/CMSSW_12_4_0_pre2/RelValTTbar_14TeV/FEVTDEBUGHLT/123X_upgrade2018_realistic_v2_v2-v1/2580000/ddb83717-75c3-49f6-873a-2830c1ba9284.root
+root://xrootd-cms.infn.it///store/relval/CMSSW_12_4_0_pre2/RelValTTbar_14TeV/FEVTDEBUGHLT/123X_upgrade2018_realistic_v2_v2-v1/2580000/8ebfbece-fb9e-49c9-bc9f-a9dfa0f56dc3.root
