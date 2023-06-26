@@ -18,17 +18,18 @@
 VertexClassifier::VertexClassifier(edm::ParameterSet const &config, edm::ConsumesCollector collector)
     : VertexCategories(),
       tracer_(config, collector),
-      hepMCLabel_(config.getUntrackedParameter<edm::InputTag>("hepMC")),
+      // hepMCLabel_(config.getUntrackedParameter<edm::InputTag>("hepMC")),
+      hepMCLabel_(edm::InputTag("generatorSmeared")),
       particleDataTableToken_(collector.esConsumes()) {
   collector.consumes<edm::HepMCProduct>(hepMCLabel_);
   // Set the history depth after hadronization
   tracer_.depth(-2);
 
   // Set the minimum decay length for detecting long decays
-  longLivedDecayLength_ = config.getUntrackedParameter<double>("longLivedDecayLength");
+  longLivedDecayLength_ = 1e-14; // config.getUntrackedParameter<double>("longLivedDecayLength");
 
   // Set the distance for clustering vertices
-  vertexClusteringDistance_ = config.getUntrackedParameter<double>("vertexClusteringDistance");
+  vertexClusteringDistance_ = 0.003; // config.getUntrackedParameter<double>("vertexClusteringDistance");
 }
 
 void VertexClassifier::newEvent(edm::Event const &event, edm::EventSetup const &setup) {
@@ -71,6 +72,13 @@ VertexClassifier const &VertexClassifier::evaluate(reco::VertexBaseRef const &ve
   return *this;
 }
 
+// Modified for appropriately classifying B, C weak decay vertices.
+// Instead of looking for a B, C weak decay in the entire history 
+// only the incoming particle is used for the classification of a 
+// TrackingVertex. In case there is no source track present, the
+// GenVertex match (closest in 3D-space) is used for classification
+// Originally written by Tim Aidan Graulich, RWTH Aachen
+
 VertexClassifier const &VertexClassifier::evaluate(TrackingVertexRef const &vertex) {
   // Initializing the category vector
   reset();
@@ -87,11 +95,11 @@ VertexClassifier const &VertexClassifier::evaluate(TrackingVertexRef const &vert
   // Get all the information related to the simulation details
   simulationInformation();
 
-  // Get all the information related to decay process
-  processesAtGenerator();
+  // Get all the information related to decay process -> called from processesAtSimulation() now
+  // processesAtGenerator();
 
   // Get information about conversion and other interactions
-  processesAtSimulation();
+  processesAtSimulationHF(vertex);
 
   // Get geometrical information about the vertices
   vertexInformation();
@@ -151,6 +159,35 @@ void VertexClassifier::processesAtGenerator() {
           update(flags_[OmegaDecay], pdgid == 3334);
           update(flags_[SigmaPlusDecay], pdgid == 3222);
           update(flags_[SigmaMinusDecay], pdgid == 3112);
+        }
+      }
+    }
+  }
+}
+
+void VertexClassifier::processesAtGeneratorHF(TrackingVertexRef const &trackingVertex) {
+  // Check if TrackingVertex has associated GenVertices
+  if (!trackingVertex->genVertices().empty()) {
+    // find true GenVertex
+    HepMC::GenVertex *vertex = findGenImage(trackingVertex);
+    // Loop over the sources looking for specific decays
+    for (HepMC::GenVertex::particle_iterator iparent = vertex->particles_begin(HepMC::parents); iparent != vertex->particles_end(HepMC::parents); ++iparent) {
+      // Collect the pdgid of the parent
+      int pdgid = std::abs((*iparent)->pdg_id());
+      // Get particle type
+      HepPDT::ParticleID particleID(pdgid);
+      // Check if the particle type is valid
+      if (particleID.isValid()) {
+        // Get particle data
+        ParticleData const *particleData = particleDataTable_->particle(particleID);
+        // Check if the particle exists in the table
+        if (particleData) {
+          // Check if its lifetime is larger than longLivedDecayLength_
+          if (particleData->lifetime() > longLivedDecayLength_) {
+            // Check for B, C weak decays
+            update(flags_[BWeakDecay], particleID.hasBottom());
+            update(flags_[CWeakDecay], particleID.hasCharm());
+          }
         }
       }
     }
@@ -252,6 +289,85 @@ void VertexClassifier::processesAtSimulation() {
       }
     }
   }
+}
+
+void VertexClassifier::processesAtSimulationHF(TrackingVertexRef const &trackingVertex) {
+  // Check for source tracks
+  if (!trackingVertex->sourceTracks().empty()) {
+    int pdgid = 0;
+    bool flag = false;
+    TrackingVertex::tp_iterator itd, its;
+    // Ensure that the real source track is selected in case of combined vertices
+    for (its = trackingVertex->sourceTracks_begin(); its != trackingVertex->sourceTracks_end(); ++its) {
+      for (its = trackingVertex->daughterTracks_begin(); its != trackingVertex->daughterTracks_end(); ++itd) {
+        if (itd != its) {
+          flag = true;
+          break;
+        }
+      }
+      if (flag) break;
+  
+    }
+    // Collect the pdgid of the original source track
+    if (its != trackingVertex->sourceTracks_end())
+      pdgid = std::abs((*its)->pdgId());
+    else
+      pdgid = 0;
+    // Geant4 process type is selected using the first Geant4 vertex assigned to the TrackingVertex
+    unsigned int processG4 = 0;
+    if (trackingVertex->nG4Vertices() > 0) {
+      processG4 = (*trackingVertex->g4Vertices_begin()).processType();
+    }
+    unsigned int process = g4toCMSProcMap_.processId(processG4);
+    // Check if decay
+    if (process == CMS::Decay) {
+      // Get Particle type
+      HepPDT::ParticleID particleID(pdgid);
+      // Check if the particle type is valid
+      if (particleID.isValid()) {
+        // Get particle data
+        ParticleData const *particleData = particleDataTable_->particle(particleID);
+        // Check if the particle exists in the table
+        if (particleData) {
+          // Check if its lifetime is bigger than longLivedDecayLength_
+          if (particleData->lifetime() > longLivedDecayLength_) {
+            // Check for B, C weak decays
+            update(flags_[BWeakDecay], particleID.hasBottom());
+            update(flags_[CWeakDecay], particleID.hasCharm());
+          }
+        }
+      }
+    }
+  } else {
+    // Classify based on GenInfo if TrackingVertex has no source track
+    processesAtGeneratorHF(trackingVertex);
+  }
+}
+
+HepMC::GenVertex* VertexClassifier::findGenImage(TrackingVertexRef const &trackingVertex) {
+  // HepMC data uses mm as base unit, convert to cm
+  const double cm = 0.1;
+  // store distance to first GenVertex as the current minimum
+  HepMC::GenVertex *GenImage = const_cast<HepMC::GenVertex *> (&(**(trackingVertex->genVertices_begin())));  //!
+  TrackingVertex::LorentzVector tvPosition = trackingVertex->position();
+  HepMC::ThreeVector gvPosition = GenImage->point3d();
+  double min_dist = sqrt(pow(tvPosition.x() - gvPosition.x()*cm, 2) + pow(tvPosition.y() - gvPosition.y()*cm, 2) + pow(tvPosition.z() - gvPosition.z()*cm, 2));
+  // Loop over remaining GenVertices in the list
+  for (TrackingVertex::genv_iterator ivertex = trackingVertex->genVertices_begin()+1; ivertex != trackingVertex->genVertices_end(); ++ivertex) {
+    // Check if minimum distance is already sufficiently low
+    if (min_dist < pow(10, -6)) break;
+
+    gvPosition = (*ivertex)->point3d();
+    // Compute distance to current TrackingVertex
+    double dist = sqrt(pow(tvPosition.x() - gvPosition.x()*cm, 2) + pow(tvPosition.y() - gvPosition.y()*cm, 2) + pow(tvPosition.z() - gvPosition.z()*cm, 2));
+    // Update min_dist, GenImage
+    if (dist < min_dist) {
+      min_dist = dist;
+      GenImage = const_cast<HepMC::GenVertex *> (&(**ivertex));
+    }
+  }
+  // return pointer to GenVertex with minimum distance
+  return GenImage;
 }
 
 void VertexClassifier::vertexInformation() {

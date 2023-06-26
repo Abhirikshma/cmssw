@@ -64,8 +64,17 @@ private:
   //! Get all the information related to decay process
   void processesAtGenerator();
 
+  //! Modified for Heavy-Flavor decay classification
+  void processesAtGeneratorHF(TrackingVertexRef const &);
+
   //! Get information about conversion and other interactions
   void processesAtSimulation();
+
+  //! Modified for Heavy-Flavor decay classification
+  void processesAtSimulationHF(TrackingVertexRef const &);
+
+  //! Get GenVertex match for TrackingVertex
+  HepMC::GenVertex* findGenImage(TrackingVertexRef const &);
 
   //! Get geometrical information about the vertices
   void vertexInformation();

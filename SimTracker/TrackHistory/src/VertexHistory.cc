@@ -5,22 +5,22 @@
 
 VertexHistory::VertexHistory(const edm::ParameterSet &config, edm::ConsumesCollector collector) : HistoryBase() {
   // Name of the track collection
-  vertexProducer_ = config.getUntrackedParameter<edm::InputTag>("vertexProducer");
+  vertexProducer_ = config.getParameter<edm::InputTag>("secondaryVertices"); // config.getUntrackedParameter<edm::InputTag>("vertexProducer");
 
   // Name of the traking pariticle collection
-  trackingTruth_ = config.getUntrackedParameter<edm::InputTag>("trackingTruth");
+  trackingTruth_ = config.getParameter<edm::InputTag>("trackingParticles"); // config.getUntrackedParameter<edm::InputTag>("trackingTruth");
 
   // Vertex association record
-  vertexAssociator_ = config.getUntrackedParameter<edm::InputTag>("vertexAssociator");
+  vertexAssociator_ = config.getParameter<edm::InputTag>("vertToTvAssociator"); // config.getUntrackedParameter<edm::InputTag>("vertexAssociator");
 
   // Association by max. value
-  bestMatchByMaxValue_ = config.getUntrackedParameter<bool>("bestMatchByMaxValue");
+  bestMatchByMaxValue_ = true; // config.getUntrackedParameter<bool>("bestMatchByMaxValue");
 
   // Enable RecoToSim association
-  enableRecoToSim_ = config.getUntrackedParameter<bool>("enableRecoToSim");
+  enableRecoToSim_ = true; // config.getUntrackedParameter<bool>("enableRecoToSim");
 
   // Enable SimToReco association
-  enableSimToReco_ = config.getUntrackedParameter<bool>("enableSimToReco");
+  enableSimToReco_ = false; // config.getUntrackedParameter<bool>("enableSimToReco");
 
   if (enableRecoToSim_ or enableSimToReco_) {
     collector.consumes<edm::View<reco::Vertex>>(vertexProducer_);
