@@ -94,6 +94,8 @@ void VertexAssociatorByTracksProducer::fillDescriptions(edm::ConfigurationDescri
   descTp.add<double>("ptMaxTP", 1e100);
   descTp.add<double>("maxRapidityTP", 2.4);
   descTp.add<double>("tipTP", 3.5);
+  descTp.add<bool>("stableOnlyTP", false);
+  descTp.add<bool>("intimeOnlyTP", false);
   desc.add<edm::ParameterSetDescription>("trackingParticleSelector", descTp);
 
   // Track-TrackingParticle association
