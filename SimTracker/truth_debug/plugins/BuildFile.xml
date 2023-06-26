@@ -10,6 +10,7 @@
 <use name="SimDataFormats/Vertex"/>
 <use name="SimTracker/TrackHistory"/>
 <use name="SimTracker/TrackAssociation"/>
+<use name="SimTracker/VertexAssociation"/>
 <use name="SimTracker/TrackerHitAssociation"/>
 <use name="PhysicsTools/UtilAlgos"/>
 <flags EDM_PLUGIN="1"/>

@@ -3,6 +3,8 @@
 
 #include <iostream>
 
+#include "HepMC/GenVertex.h"
+
 #include "FWCore/Framework/interface/Frameworkfwd.h"
 #include "FWCore/Framework/interface/one/EDAnalyzer.h"
 #include "FWCore/Framework/interface/Event.h"
@@ -18,11 +20,15 @@
 #include "DataFormats/TrackReco/interface/TrackFwd.h"
 #include "DataFormats/VertexReco/interface/Vertex.h"
 #include "DataFormats/VertexReco/interface/VertexFwd.h"
+#include "DataFormats/BTauReco/interface/SecondaryVertexTagInfo.h"
 #include "SimDataFormats/TrackingAnalysis/interface/TrackingParticle.h"
 #include "SimDataFormats/TrackingAnalysis/interface/TrackingParticleFwd.h"
+#include "SimDataFormats/TrackingAnalysis/interface/TrackingVertexContainer.h"
 #include "SimDataFormats/Associations/interface/TrackToTrackingParticleAssociator.h"
+#include "SimDataFormats/Associations/interface/VertexToTrackingVertexAssociator.h"
 
 #include "RecoTracker/FinalTrackSelectors/interface/getBestVertex.h"
+#include "SimTracker/TrackHistory/interface/VertexClassifier.h"
 
 class Ntuplizer : public edm::one::EDAnalyzer<edm::one::SharedResources> {
 
@@ -42,8 +48,16 @@ private:
     edm::EDGetTokenT<edm::View<reco::Track>> tracksToken_;
     edm::EDGetTokenT<std::vector<TrackingParticle>> tpToken_;
     edm::EDGetTokenT<reco::TrackToTrackingParticleAssociator> assocToken_;
+    edm::EDGetTokenT<reco::VertexToTrackingVertexAssociator> vertAssocToken_;
     edm::EDGetTokenT<reco::BeamSpot> beamSpotToken_;
     edm::EDGetTokenT<reco::VertexCollection> vertexToken_;
+    edm::EDGetTokenT<edm::View<reco::Vertex>> secondaryVertexToken_;
+    edm::EDGetTokenT<TrackingVertexCollection> tvToken_;
+    // edm::EDGetTokenT<reco::SecondaryVertexTagInfo> secondaryVertexToken_;
+
+    // edm::InputTag svTagInfoProducer_;
+
+    VertexClassifier classifier_;
 
     using TrackingParticleRefKeyToIndex = std::unordered_map<reco::RecoToSimCollection::index_type, size_t>;
 
@@ -103,8 +117,15 @@ Ntuplizer::Ntuplizer(const edm::ParameterSet& iConfig)
     : tracksToken_(consumes(iConfig.getParameter<edm::InputTag>("tracks"))),
     tpToken_(consumes<std::vector<TrackingParticle>>(iConfig.getParameter<edm::InputTag>("trackingParticles"))),
     assocToken_(consumes<reco::TrackToTrackingParticleAssociator>(iConfig.getParameter<edm::InputTag>("tkToTpAssociator"))),
+    vertAssocToken_(consumes<reco::VertexToTrackingVertexAssociator>(iConfig.getParameter<edm::InputTag>("vertToTvAssociator"))),
     beamSpotToken_(consumes<reco::BeamSpot>(iConfig.getParameter<edm::InputTag>("beamSpot"))),
-    vertexToken_(consumes<reco::VertexCollection>(iConfig.getParameter<edm::InputTag>("vertices"))) {
+    vertexToken_(consumes<reco::VertexCollection>(iConfig.getParameter<edm::InputTag>("vertices"))),
+    secondaryVertexToken_(consumes(iConfig.getParameter<edm::InputTag>("secondaryVertices"))),
+    tvToken_(consumes<TrackingVertexCollection>(iConfig.getParameter<edm::InputTag>("trackingVertices"))),
+    classifier_(iConfig, consumesCollector()) {
+        event_index = 0;
+        // svTagInfoProducer_ = iConfig.getParameter<edm::InputTag>("secondaryVertices");
+        // consumes<reco::SecondaryVertexTagInfoCollection>(iConfig.getParameter<edm::InputTag>("secondaryVertices"));
     };
 
 Ntuplizer::~Ntuplizer() {
@@ -180,7 +201,7 @@ void Ntuplizer::beginJob() {
     track_tree_->Branch("dxy_error", &track_dxy_err);
     track_tree_->Branch("dz_err", &track_dz_err);
 
-    // associator
+    // track associator
     assoc_tree_ = fs->make<TTree>("associations","track to TP");
 
     assoc_tree_->Branch("recoToSimMap", &track_TP_recoToSim);
@@ -208,6 +229,8 @@ void Ntuplizer::endJob() { };
 void Ntuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& setup) {
     event_index++;
     clearVariables();
+    classifier_.newEvent(iEvent, setup);
+
     // std::cout << "getting collections...\n";
     edm::Handle<edm::View<reco::Track>> trackCollectionH;
     iEvent.getByToken(tracksToken_, trackCollectionH);
@@ -222,8 +245,47 @@ void Ntuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& setup) 
     iEvent.getByToken(tpToken_, tpCollectionH);
     const TrackingParticleCollection& tpCollection = *(tpCollectionH.product());
 
+    edm::Handle<TrackingVertexCollection> tvCollectionH;
+    iEvent.getByToken(tvToken_, tvCollectionH);
+    const TrackingVertexCollection& tvCollection = *(tvCollectionH.product());
+
+    // edm::Handle<reco::SecondaryVertexTagInfoCollection> svTagInfoCollection;
+    // iEvent.getByLabel(svTagInfoProducer_, svTagInfoCollection);
+    edm::Handle<edm::View<reco::Vertex>> svH;
+    iEvent.getByToken(secondaryVertexToken_, svH);
+    const auto& secondaryVertices = *(svH.product());
+    
+    std::cout << "Event " << event_index << "  N (IVF secondary vertices) " << secondaryVertices.size() << std::endl;
+    std::cout << "secondary vertices in collection - positions: " << std::endl; 
+    for (const auto& secV : secondaryVertices) {
+        std::cout << "\t" << secV.position().x() << ", " << secV.position().y() << ", " << secV.position().z() << std::endl;
+    }
+
+    // reco tracks to TrackingParticles
     const auto& associator = iEvent.get(assocToken_);
     const reco::RecoToSimCollection tkToTpMap = associator.associateRecoToSim(trackCollectionH, tpCollectionH);
+
+    // reco IVF vertices -> TrackingVertices
+    const auto& vert_associator = iEvent.get(vertAssocToken_);
+    reco::VertexRecoToSimCollection vertToTvMap = vert_associator.associateRecoToSim(svH, tvCollectionH);
+    std::cout << "VertexRecoToSim size " << vertToTvMap.size() << std::endl;
+
+    for (reco::VertexRecoToSimCollection::const_iterator iR2S = vertToTvMap.begin(); iR2S != vertToTvMap.end(); ++iR2S) {
+        reco::VertexBaseRef recVertex = iR2S->key;
+        std::vector<std::pair<TrackingVertexRef, double>> simVertices = iR2S->val;
+
+        std::cout << "reco vertex position: " << recVertex->position().x() << ", " << recVertex->position().y() << ", " << recVertex->position().z() << std::endl;
+
+        for (const auto &match : simVertices) {
+            TrackingVertexRef simVertex = match.first;
+            std::cout << "\tsim vertex: " << simVertex->position().x() << ", " << simVertex->position().y() << ", " << simVertex->position().z();
+            std::cout << "\tquality: " << match.second << std::endl;
+            classifier_.evaluate(simVertex);
+            if (classifier_.is(VertexCategories::SecondaryVertex)) std::cout << "\tSecondary vertex" << std::endl;
+            if (classifier_.is(VertexCategories::BWeakDecay)) std::cout << "\tB weak decay" << std::endl;
+            if (classifier_.is(VertexCategories::CWeakDecay)) std::cout << "\tC weak decay" << std::endl;
+        }
+    }
 
     track_TP_recoToSim.resize(tracks.size());
     track_TP_recoToSim_qual.resize(tracks.size());
@@ -242,6 +304,17 @@ void Ntuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& setup) 
         tp_parentVertex_x.push_back(tp_i.vx());
         tp_parentVertex_y.push_back(tp_i.vy());
         tp_parentVertex_z.push_back(tp_i.vz());
+
+        // try TrackingParticle --> TrackingVertex --> GenVertex
+        const TrackingVertex& tp_parent = *(tp_i.parentVertex());
+        const auto &tp_parent_genVerts = tp_parent.genVertices();
+
+        //std::cout << "tp " << i << " parent vert pos " << tp_parent.position().x() << ", " << tp_parent.position().y() << ", " << tp_parent.position().z() << " gen verts: \n";
+        for (const auto &gv_i : tp_parent_genVerts) {
+            // std::cout << "\t" << gv_i->position().x() << ", " << gv_i->position().y() << ", " << gv_i->position().z() << std::endl;
+            // gv_i->print();
+        }
+
     }
 
     // track loop
@@ -305,8 +378,11 @@ void Ntuplizer::fillDescriptions(edm::ConfigurationDescriptions& descriptions) {
   desc.add<edm::InputTag>("tracks", edm::InputTag("generalTracks"));
   desc.add<edm::InputTag>("trackingParticles", edm::InputTag("mix", "MergedTrackTruth"));
   desc.add<edm::InputTag>("tkToTpAssociator", edm::InputTag("trackAssociatorByHits"));
+  desc.add<edm::InputTag>("vertToTvAssociator", edm::InputTag("VertexAssociator"));
   desc.add<edm::InputTag>("beamSpot", edm::InputTag("offlineBeamSpot"));
-  desc.add<edm::InputTag>("vertices", edm::InputTag("offlinePrimaryVertices")); 
+  desc.add<edm::InputTag>("vertices", edm::InputTag("offlinePrimaryVertices"));
+  desc.add<edm::InputTag>("secondaryVertices", edm::InputTag("inclusiveSecondaryVertices"));
+  desc.add<edm::InputTag>("trackingVertices", edm::InputTag("mix", "MergedTrackTruth")); 
   descriptions.add("Ntuplizer", desc);
 }
 
