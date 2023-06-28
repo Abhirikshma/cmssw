@@ -59,11 +59,14 @@ private:
 
     VertexClassifier classifier_;
 
-    using TrackingParticleRefKeyToIndex = std::unordered_map<reco::RecoToSimCollection::index_type, size_t>;
+    using RefKeyToIndex = std::unordered_map<reco::RecoToSimCollection::index_type, size_t>;
 
     // output trees
     TTree* track_tree_;
+    TTree* vert_tree_;
     TTree* assoc_tree_;
+    TTree* v_assoc_tree_;
+    TTree* tv_tree_;
     TTree* tp_tree_;
 
     void clearVariables();
@@ -96,9 +99,38 @@ private:
     std::vector<float> track_dxy_err;
     std::vector<float> track_dz_err;
 
-    // association
+    // IVF vertices
+    std::vector<unsigned int> vert_id;
+    std::vector<double> vert_x;
+    std::vector<double> vert_y;
+    std::vector<double> vert_z;
+    std::vector<double> vert_x_err;
+    std::vector<double> vert_y_err;
+    std::vector<double> vert_z_err;
+    std::vector<int> vert_nTracks;
+    std::vector<double> vert_chi2;
+    std::vector<double> vert_ndof;
+    std::vector<bool> vert_valid;
+    std::vector<bool> vert_fake;
+
+    // track association
     std::vector<std::vector<unsigned int>> track_TP_recoToSim; // vector of TPs associated to every reco track
-    std::vector<std::vector<int>> track_TP_recoToSim_qual; 
+    std::vector<std::vector<double>> track_TP_recoToSim_qual; 
+
+    // vertex (IVF) association
+    std::vector<std::vector<unsigned int>> vert_TV_recoToSim;
+    std::vector<std::vector<double>> vert_TV_recoToSim_qual;
+
+    // tracking vertices
+    std::vector<unsigned int> tv_id;
+    std::vector<double> tv_x;
+    std::vector<double> tv_y;
+    std::vector<double> tv_z;
+    std::vector<bool> tv_inVol;
+    std::vector<bool> tv_isSecondary;
+    std::vector<bool> tv_isTertiary;
+    std::vector<bool> tv_isBWeak;
+    std::vector<bool> tv_isCWeak;
 
     // tracking particles
     std::vector<int> tp_ev;
@@ -107,6 +139,8 @@ private:
     std::vector<float> tp_eta;
     std::vector<float> tp_phi;
     std::vector<int> tp_pdgID;
+    std::vector<unsigned int> tp_parentVertex;
+    std::vector<std::vector<unsigned int>> tp_daughterVertices;
     std::vector<double> tp_parentVertex_x;
     std::vector<double> tp_parentVertex_y;
     std::vector<double> tp_parentVertex_z;
@@ -156,8 +190,31 @@ void Ntuplizer::clearVariables() {
     track_dxy_err.clear();
     track_dz_err.clear();
 
+    vert_id.clear();
+    vert_x.clear();
+    vert_y.clear();
+    vert_z.clear();
+    vert_x_err.clear();
+    vert_y_err.clear();
+    vert_z_err.clear();
+    vert_nTracks.clear();
+    vert_chi2.clear();
+    vert_ndof.clear();
+    vert_valid.clear();
+    vert_fake.clear();
+
     track_TP_recoToSim.clear();
     track_TP_recoToSim_qual.clear();
+
+    tv_id.clear();
+    tv_x.clear();
+    tv_y.clear();
+    tv_z.clear();
+    tv_inVol.clear();
+    tv_isSecondary.clear();
+    tv_isTertiary.clear();
+    tv_isBWeak.clear();
+    tv_isCWeak.clear();
 
     tp_ev.clear();
     tp_id.clear();
@@ -165,6 +222,8 @@ void Ntuplizer::clearVariables() {
     tp_eta.clear();
     tp_phi.clear();
     tp_pdgID.clear();
+    tp_parentVertex.clear();
+    tp_daughterVertices.clear();
     tp_parentVertex_x.clear();
     tp_parentVertex_y.clear();
     tp_parentVertex_z.clear();
@@ -173,7 +232,6 @@ void Ntuplizer::clearVariables() {
 void Ntuplizer::beginJob() {
     // usesResource(TFileService::kSharedResource);
     edm::Service<TFileService> fs;
-//    std::cout << "making trees\n";
 
     // tracks
     track_tree_ = fs->make<TTree>("tracks","RECO tracks");
@@ -201,12 +259,47 @@ void Ntuplizer::beginJob() {
     track_tree_->Branch("dxy_error", &track_dxy_err);
     track_tree_->Branch("dz_err", &track_dz_err);
 
+    // IVF vertices
+    vert_tree_ = fs->make<TTree>("ivf_verts", "IVF vertices");
+
+    vert_tree_->Branch("id", &vert_id);
+    vert_tree_->Branch("x", &vert_x);
+    vert_tree_->Branch("y", &vert_y);
+    vert_tree_->Branch("z", &vert_z);
+    vert_tree_->Branch("x_error", &vert_x_err);
+    vert_tree_->Branch("y_error", &vert_y_err);
+    vert_tree_->Branch("z_error", &vert_z_err);
+    vert_tree_->Branch("nTracks", &vert_nTracks);
+    vert_tree_->Branch("chi2", &vert_chi2);
+    vert_tree_->Branch("ndof", &vert_ndof);
+    vert_tree_->Branch("isValid", &vert_valid);
+    vert_tree_->Branch("isFake", &vert_fake);
+
     // track associator
-    assoc_tree_ = fs->make<TTree>("associations","track to TP");
+    assoc_tree_ = fs->make<TTree>("track_associations","track to TP");
 
     assoc_tree_->Branch("recoToSimMap", &track_TP_recoToSim);
     assoc_tree_->Branch("recoToSimQual", &track_TP_recoToSim_qual);
 
+    // vertex associator
+    v_assoc_tree_ = fs->make<TTree>("vertex_associations", "IVF vertices to TV");
+
+    v_assoc_tree_->Branch("recoToSimMap", &vert_TV_recoToSim);
+    v_assoc_tree_->Branch("recoToSimQual", &vert_TV_recoToSim_qual);
+
+    // tracking vertices
+    tv_tree_ = fs->make<TTree>("trackingVertices", "tracking vertices");
+
+    tv_tree_->Branch("id", &tv_id);
+    tv_tree_->Branch("x", &tv_x);
+    tv_tree_->Branch("y", &tv_y);
+    tv_tree_->Branch("z", &tv_z);
+    tv_tree_->Branch("inVol", &tv_inVol);
+    tv_tree_->Branch("isSecondary", &tv_isSecondary);
+    tv_tree_->Branch("isTertiary", &tv_isTertiary);
+    tv_tree_->Branch("isBWeak", &tv_isBWeak);
+    tv_tree_->Branch("isCWeak", &tv_isCWeak);
+    
     // tracking particles
     tp_tree_ = fs->make<TTree>("trackingParticles", "tracking particles");
 
@@ -216,12 +309,11 @@ void Ntuplizer::beginJob() {
     tp_tree_->Branch("eta", &tp_eta);
     tp_tree_->Branch("phi", &tp_phi);
     tp_tree_->Branch("pdgID", &tp_pdgID);
+    tp_tree_->Branch("parentVertex", &tp_parentVertex);
+    tp_tree_->Branch("daughterVertices", &tp_daughterVertices);
     tp_tree_->Branch("parentVertex_x", &tp_parentVertex_x);
     tp_tree_->Branch("parentVertex_y", &tp_parentVertex_y);
-    tp_tree_->Branch("parentVertex_z", &tp_parentVertex_z);
-
-    // std::cout << "made trees\n";
-    
+    tp_tree_->Branch("parentVertex_z", &tp_parentVertex_z);    
 };
 
 void Ntuplizer::endJob() { };
@@ -269,30 +361,78 @@ void Ntuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& setup) 
     const auto& vert_associator = iEvent.get(vertAssocToken_);
     reco::VertexRecoToSimCollection vertToTvMap = vert_associator.associateRecoToSim(svH, tvCollectionH);
     std::cout << "VertexRecoToSim size " << vertToTvMap.size() << std::endl;
+    std::cout << "Number of TrackingVertices " << tvCollection.size() << std::endl;
 
-    for (reco::VertexRecoToSimCollection::const_iterator iR2S = vertToTvMap.begin(); iR2S != vertToTvMap.end(); ++iR2S) {
-        reco::VertexBaseRef recVertex = iR2S->key;
-        std::vector<std::pair<TrackingVertexRef, double>> simVertices = iR2S->val;
+    RefKeyToIndex tvKeyToIndex; // map from Ref::key() to index for TVs
+    // tracking vertex loop
+    for (unsigned int i=0; i < tvCollection.size(); ++i) {
+        TrackingVertexRef tv_ref(tvCollectionH, i);
+        tvKeyToIndex[tv_ref.key()] = i;
+        const auto& tv_i = tvCollection[i];
+        tv_id.push_back(i);
+        tv_x.push_back(tv_i.position().x());
+        tv_y.push_back(tv_i.position().y());
+        tv_z.push_back(tv_i.position().z());
+        tv_inVol.push_back(tv_i.inVolume()); // is it inside tracker volume
+        // vertex classification flags
+        classifier_.evaluate(tv_ref);
+        if (classifier_.is(VertexCategories::SecondaryVertex)) tv_isSecondary.push_back(true); else tv_isSecondary.push_back(false);
+        if (classifier_.is(VertexCategories::TertiaryVertex)) tv_isTertiary.push_back(true); else tv_isTertiary.push_back(false);
+        if (classifier_.is(VertexCategories::BWeakDecay)) tv_isBWeak.push_back(true); else tv_isBWeak.push_back(false);
+        if (classifier_.is(VertexCategories::CWeakDecay)) tv_isCWeak.push_back(true); else tv_isCWeak.push_back(false);
+    }
 
-        std::cout << "reco vertex position: " << recVertex->position().x() << ", " << recVertex->position().y() << ", " << recVertex->position().z() << std::endl;
+    vert_TV_recoToSim.resize(secondaryVertices.size());
+    vert_TV_recoToSim_qual.resize(secondaryVertices.size());
+    // secondary vertices loop
+    for (unsigned int i=0; i<secondaryVertices.size(); ++i) {
+        const auto& v = secondaryVertices[i];
+        vert_id.push_back(i);
+        vert_x.push_back(v.x());
+        vert_y.push_back(v.y());
+        vert_z.push_back(v.z());
+        vert_x_err.push_back(v.xError());
+        vert_y_err.push_back(v.yError());
+        vert_z_err.push_back(v.zError());
+        vert_nTracks.push_back(v.nTracks());
+        vert_ndof.push_back(v.ndof());
+        vert_chi2.push_back(v.chi2());
+        vert_valid.push_back(v.isValid());
+        vert_fake.push_back(v.isFake());
 
-        for (const auto &match : simVertices) {
-            TrackingVertexRef simVertex = match.first;
-            std::cout << "\tsim vertex: " << simVertex->position().x() << ", " << simVertex->position().y() << ", " << simVertex->position().z();
-            std::cout << "\tquality: " << match.second << std::endl;
-            classifier_.evaluate(simVertex);
-            if (classifier_.is(VertexCategories::SecondaryVertex)) std::cout << "\tSecondary vertex" << std::endl;
-            if (classifier_.is(VertexCategories::BWeakDecay)) std::cout << "\tB weak decay" << std::endl;
-            if (classifier_.is(VertexCategories::CWeakDecay)) std::cout << "\tC weak decay" << std::endl;
+        reco::VertexBaseRef v_ref (svH, i);
+
+        std::cout << "reco vert posn. " << v.x() << " " << v.y() << " " << v.z() << "  matches: "<< std::endl;
+        if (v.isValid()) std::cout << "valid!\n";
+        if (v.isFake()) std::cout << "fake!\n"; 
+        // reco vert -> find in map -> TVs (first), qualities (second)
+        auto foundHere = vertToTvMap.find(v_ref);
+        if (foundHere != vertToTvMap.end()) {
+            auto foundVal = vertToTvMap[v_ref];
+            if (foundVal.size() != 0) {
+                for (const auto& val_i : foundVal) {
+                    vert_TV_recoToSim[i].push_back(tvKeyToIndex.at(val_i.first.key())); // ask in ref key to index map of TVs
+                    vert_TV_recoToSim_qual[i].push_back(val_i.second);
+                    unsigned int id = tvKeyToIndex.at(val_i.first.key());
+                    TrackingVertexRef tv_ref (tvCollectionH, id);
+                    const auto& tv = tvCollection[tvKeyToIndex.at(val_i.first.key())];
+                    std::cout << "\tTV posn. " << tv.position().x() << " " << tv.position().y() << " " << tv.position().z() << "  qual " << val_i.second << std::endl;
+                    classifier_.evaluate(tv_ref);
+                    if (classifier_.is(VertexCategories::SecondaryVertex)) std::cout << "\tSecondary vertex" << std::endl;
+                    if (classifier_.is(VertexCategories::BWeakDecay)) std::cout << "\tB weak decay" << std::endl;
+                    if (classifier_.is(VertexCategories::CWeakDecay)) std::cout << "\tC weak decay" << std::endl;
+                }
+            }
         }
     }
 
     track_TP_recoToSim.resize(tracks.size());
     track_TP_recoToSim_qual.resize(tracks.size());
+    tp_daughterVertices.resize(tpCollection.size());
 
-    TrackingParticleRefKeyToIndex tpKeyToIndex; // map from Ref::key() to index for TPs
+    RefKeyToIndex tpKeyToIndex; // map from Ref::key() to index for TPs
     // tracking particle loop
-    for (size_t i=0; i < tpCollection.size(); ++i) {
+    for (unsigned int i=0; i < tpCollection.size(); ++i) {
         tpKeyToIndex[TrackingParticleRef(tpCollectionH, i).key()] = i;
         const auto& tp_i = tpCollection[i];
         tp_ev.push_back(event_index);
@@ -305,6 +445,11 @@ void Ntuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& setup) 
         tp_parentVertex_y.push_back(tp_i.vy());
         tp_parentVertex_z.push_back(tp_i.vz());
 
+        tp_parentVertex.push_back(tvKeyToIndex.at(tp_i.parentVertex().key())); // at -> [] ??
+        for (auto d = tp_i.decayVertices_begin(); d != tp_i.decayVertices_end(); ++d) {
+            tp_daughterVertices[i].push_back(tvKeyToIndex.at(d.key()));
+        }
+        
         // try TrackingParticle --> TrackingVertex --> GenVertex
         const TrackingVertex& tp_parent = *(tp_i.parentVertex());
         const auto &tp_parent_genVerts = tp_parent.genVertices();
@@ -358,8 +503,7 @@ void Ntuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& setup) 
             if (foundVal.size() != 0) {
                 // std::cout << "found sim match\n";
                 for (const auto& val_i : foundVal) {
-                    // track_TP_recoToSim[i].push_back(val_i.first.index());
-                    track_TP_recoToSim[i].push_back(tpKeyToIndex.at(val_i.first.key()));
+                    track_TP_recoToSim[i].push_back(tpKeyToIndex.at(val_i.first.key())); // at -> [] ??
                     track_TP_recoToSim_qual[i].push_back(val_i.second);
                 }
             }
@@ -369,7 +513,10 @@ void Ntuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& setup) 
 
     // fill trees
     track_tree_->Fill();
+    vert_tree_->Fill();
     assoc_tree_->Fill();
+    v_assoc_tree_->Fill();
+    tv_tree_->Fill();
     tp_tree_->Fill();
 }
 
