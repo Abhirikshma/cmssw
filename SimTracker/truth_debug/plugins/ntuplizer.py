@@ -63,6 +63,7 @@ process.analyze = cms.EDAnalyzer("Ntuplizer",
     # hepMC = cms.untracked.InputTag("generatorSmeared"),
     # longLivedDecayLength = cms.untracked.double(1e-14),
     # vertexClusteringDistance = cms.untracked.double(0.003)
+    enableDebug = cms.bool(False)
 )
 
 process.p = cms.Path(
