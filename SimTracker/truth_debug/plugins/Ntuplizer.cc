@@ -113,6 +113,8 @@ private:
     std::vector<double> vert_y_err;
     std::vector<double> vert_z_err;
     std::vector<int> vert_nTracks;
+    std::vector<std::vector<unsigned int>> vert_tracks;
+    std::vector<std::vector<float>> vert_track_weights;
     std::vector<double> vert_chi2;
     std::vector<double> vert_ndof;
     std::vector<bool> vert_valid;
@@ -204,6 +206,8 @@ void Ntuplizer::clearVariables() {
     vert_y_err.clear();
     vert_z_err.clear();
     vert_nTracks.clear();
+    vert_tracks.clear();
+    vert_track_weights.clear();
     vert_chi2.clear();
     vert_ndof.clear();
     vert_valid.clear();
@@ -279,6 +283,8 @@ void Ntuplizer::beginJob() {
     vert_tree_->Branch("y_error", &vert_y_err);
     vert_tree_->Branch("z_error", &vert_z_err);
     vert_tree_->Branch("nTracks", &vert_nTracks);
+    vert_tree_->Branch("tracks", &vert_tracks);
+    vert_tree_->Branch("track_weights", &vert_track_weights);
     vert_tree_->Branch("chi2", &vert_chi2);
     vert_tree_->Branch("ndof", &vert_ndof);
     vert_tree_->Branch("isValid", &vert_valid);
@@ -360,11 +366,11 @@ void Ntuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& setup) 
         }
     }
 
-    // reco tracks to TrackingParticles
+    // Associations: reco tracks to TrackingParticles
     const auto& associator = iEvent.get(assocToken_);
     const reco::RecoToSimCollection tkToTpMap = associator.associateRecoToSim(trackCollectionH, tpCollectionH);
 
-    // reco IVF vertices -> TrackingVertices
+    // Associations: reco IVF vertices -> TrackingVertices
     const auto& vert_associator = iEvent.get(vertAssocToken_);
     reco::VertexRecoToSimCollection vertToTvMap = vert_associator.associateRecoToSim(svH, tvCollectionH);
     if (debug_) {
@@ -390,56 +396,6 @@ void Ntuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& setup) 
         if (classifier_.is(VertexCategories::CWeakDecay)) tv_isCWeak.push_back(true); else tv_isCWeak.push_back(false);
     }
 
-    vert_TV_recoToSim.resize(secondaryVertices.size());
-    vert_TV_recoToSim_qual.resize(secondaryVertices.size());
-    // secondary vertices loop
-    for (unsigned int i=0; i<secondaryVertices.size(); ++i) {
-        const auto& v = secondaryVertices[i];
-        vert_x.push_back(v.x());
-        vert_y.push_back(v.y());
-        vert_z.push_back(v.z());
-        vert_x_err.push_back(v.xError());
-        vert_y_err.push_back(v.yError());
-        vert_z_err.push_back(v.zError());
-        vert_nTracks.push_back(v.nTracks());
-        vert_ndof.push_back(v.ndof());
-        vert_chi2.push_back(v.chi2());
-        vert_valid.push_back(v.isValid());
-        vert_fake.push_back(v.isFake());
-
-        reco::VertexBaseRef v_ref (svH, i);
-
-        if (debug_) {
-            std::cout << "reco vert posn. " << v.x() << " " << v.y() << " " << v.z() << "  matches: "<< std::endl;
-            if (v.isValid()) std::cout << "valid!\n";
-            if (v.isFake()) std::cout << "fake!\n"; 
-        }
-        
-        // reco vert -> find in map -> TVs (first), qualities (second)
-        auto foundHere = vertToTvMap.find(v_ref);
-        if (foundHere != vertToTvMap.end()) {
-            auto foundVal = vertToTvMap[v_ref];
-            if (foundVal.size() != 0) {
-                for (const auto& val_i : foundVal) {
-                    unsigned int id = tvKeyToIndex.at(val_i.first.key());
-                    if (debug_) std::cout << "index " << id << std::endl;
-                    vert_TV_recoToSim[i].push_back(id); // ask in map for index of TVs
-                    vert_TV_recoToSim_qual[i].push_back(val_i.second);
-                    
-                    if (debug_) {
-                        TrackingVertexRef tv_ref (tvCollectionH, id);
-                        const auto& tv = tvCollection[id];
-                        std::cout << "\tTV posn. " << tv.position().x() << " " << tv.position().y() << " " << tv.position().z() << "  qual " << val_i.second << std::endl;
-                        classifier_.evaluate(tv_ref);
-                        if (classifier_.is(VertexCategories::SecondaryVertex)) std::cout << "\tSecondary vertex" << std::endl;
-                        if (classifier_.is(VertexCategories::BWeakDecay)) std::cout << "\tB weak decay" << std::endl;
-                        if (classifier_.is(VertexCategories::CWeakDecay)) std::cout << "\tC weak decay" << std::endl;
-                    }
-                }
-            }
-        }
-    }
-
     track_TP_recoToSim.resize(tracks.size());
     track_TP_recoToSim_qual.resize(tracks.size());
     tp_daughterVertices.resize(tpCollection.size());
@@ -463,6 +419,7 @@ void Ntuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& setup) 
         }
     }
 
+    RefKeyToIndex tkKeyToIndex; // Ref::key() to index map for tracks
     // track loop
     for (unsigned int i=0; i < tracks.size(); ++i) {
         const auto& tk_i = tracks[i];
@@ -498,6 +455,7 @@ void Ntuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& setup) 
 
         // associator
         edm::RefToBase<reco::Track> tkRef_i(trackCollectionH, i);
+        tkKeyToIndex[tkRef_i.key()] = i;
         auto foundHere = tkToTpMap.find(tkRef_i);
         if (foundHere != tkToTpMap.end()) {
             auto foundVal = tkToTpMap[tkRef_i];
@@ -510,6 +468,68 @@ void Ntuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& setup) 
         }
 
     } // track loop
+
+    vert_TV_recoToSim.resize(secondaryVertices.size());
+    vert_TV_recoToSim_qual.resize(secondaryVertices.size());
+    vert_tracks.resize(secondaryVertices.size());
+    vert_track_weights.resize(secondaryVertices.size());
+    // secondary vertices loop
+    for (unsigned int i=0; i<secondaryVertices.size(); ++i) {
+        const auto& v = secondaryVertices[i];
+        vert_x.push_back(v.x());
+        vert_y.push_back(v.y());
+        vert_z.push_back(v.z());
+        vert_x_err.push_back(v.xError());
+        vert_y_err.push_back(v.yError());
+        vert_z_err.push_back(v.zError());
+        vert_nTracks.push_back(v.nTracks()); // number of tracks which contibuted to vertex with weight > 0.5
+        vert_ndof.push_back(v.ndof());
+        vert_chi2.push_back(v.chi2());
+        vert_valid.push_back(v.isValid());
+        vert_fake.push_back(v.isFake());
+
+        reco::VertexBaseRef v_ref (svH, i);
+
+        // tracks in vertex
+        if (debug_) std::cout << "tracks in vertex " << i << ":" << std::endl; 
+        for (auto tk_i = v.tracks_begin(); tk_i != v.tracks_end(); ++tk_i) {
+            vert_tracks[i].push_back(tkKeyToIndex.at(tk_i->key()));
+            vert_track_weights[i].push_back(v.trackWeight(*tk_i));
+            if (debug_)
+            std::cout << "tk " <<tkKeyToIndex.at(tk_i->key()) << " wt " << v.trackWeight(*tk_i) << "  ";
+        }
+
+        if (debug_) {
+            std::cout << "\nreco vert posn. " << v.x() << " " << v.y() << " " << v.z() << "  matches: "<< std::endl;
+            if (v.isValid()) std::cout << "valid!\n";
+            if (v.isFake()) std::cout << "fake!\n"; 
+        }
+        
+        // reco vert -> find in map -> TVs (first), qualities (second)
+        auto foundHere = vertToTvMap.find(v_ref);
+        if (foundHere != vertToTvMap.end()) {
+            auto foundVal = vertToTvMap[v_ref];
+            if (foundVal.size() != 0) {
+                for (const auto& val_i : foundVal) {
+                    unsigned int id = tvKeyToIndex.at(val_i.first.key());
+                    if (debug_) std::cout << "index " << id << std::endl;
+                    vert_TV_recoToSim[i].push_back(id); // ask in map for index of TVs
+                    vert_TV_recoToSim_qual[i].push_back(val_i.second);
+                    
+                    if (debug_) {
+                        TrackingVertexRef tv_ref (tvCollectionH, id);
+                        const auto& tv = tvCollection[id];
+                        std::cout << "\tTV posn. " << tv.position().x() << " " << tv.position().y() << " " << tv.position().z() << "  qual " << val_i.second << std::endl;
+                        classifier_.evaluate(tv_ref);
+                        if (classifier_.is(VertexCategories::SecondaryVertex)) std::cout << "\tSecondary vertex" << std::endl;
+                        if (classifier_.is(VertexCategories::BWeakDecay)) std::cout << "\tB weak decay" << std::endl;
+                        if (classifier_.is(VertexCategories::CWeakDecay)) std::cout << "\tC weak decay" << std::endl;
+                    }
+                }
+            }
+        }
+    }
+
 
     // fill trees
     track_tree_->Fill();
