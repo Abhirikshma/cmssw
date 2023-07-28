@@ -16,18 +16,13 @@ process.load("Configuration.StandardSequences.MagneticField_cff")
 process.load("Configuration.StandardSequences.Reconstruction_cff")
 process.load('Configuration.StandardSequences.GeometryRecoDB_cff')
 
-# process.load("SimGeneral.TrackingAnalysis.trackingParticles_cfi")
-# process.load("SimGeneral.TrackingAnalysis.Playback_cfi")
 process.load("SimTracker.TrackerHitAssociation.tpClusterProducer_cfi")
 process.load("SimGeneral.TrackingAnalysis.simHitTPAssociation_cfi")
 process.load("SimTracker.TrackAssociatorProducers.trackAssociatorByHits_cfi")
 process.load("SimTracker.TrackAssociation.trackingParticleRecoTrackAsssociation_cfi")
 process.load("SimTracker.VertexAssociation.VertexAssociatorByTracks_cfi")
 process.load("RecoTracker.Configuration.RecoTracker_cff")
-# process.load("SimGeneral.MixingModule.trackingTruthProducer_cfi")
 
-# process.load("SimTracker.TrackHistory.SecondaryVertexTagInfoProxy_cff")
-# process.load("SimTracker.TrackHistory.Playback_cff")
 process.load("SimTracker.TrackHistory.VertexClassifier_cff")
 
 process.maxEvents = cms.untracked.PSet( input = cms.untracked.int32(-1) )
@@ -52,29 +47,15 @@ process.vertexAssociatorByTracksByHits = process.VertexAssociatorByTracks.clone(
 )
 
 process.analyze = cms.EDAnalyzer("Ntuplizer",
-    # process.vertexClassifier,
     vertToTvAssociator = cms.InputTag("vertexAssociatorByTracksByHits"),
-    # bestMatchByMaxValue = cms.untracked.bool(True),
-    # trackingTruth = cms.untracked.InputTag('mix','MergedTrackTruth'),
-    # vertexAssociator = cms.untracked.InputTag('vertexAssociatorByTracksByHits'),
-    # vertexProducer = cms.untracked.InputTag("inclusiveSecondaryVertices"),
-    # enableRecoToSim = cms.untracked.bool(True),
-    # enableSimToReco = cms.untracked.bool(False),
-    # hepMC = cms.untracked.InputTag("generatorSmeared"),
-    # longLivedDecayLength = cms.untracked.double(1e-14),
-    # vertexClusteringDistance = cms.untracked.double(0.003)
     enableDebug = cms.bool(False)
 )
 
 process.p = cms.Path(
-    # process.playback+
     process.simHitTPAssocProducer+
     process.tpClusterProducer+
-    # process.trackingParticles+
-    # process.svTagInfoProxy+
     process.trackAssociatorByHits+
     process.trackingParticleRecoTrackAssociationByHits+
     process.vertexAssociatorByTracksByHits+
-    # process.vertexAssociatorSequence+
     process.analyze
 )

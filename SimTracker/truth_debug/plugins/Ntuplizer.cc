@@ -39,9 +39,7 @@ public:
 
 private:
     void beginJob() override;
-    // void beginRun(const edm::Run&, const edm::EventSetup&) override;
     void analyze(const edm::Event&, const edm::EventSetup&) override;
-    // void endRun(const edm::Run& iEvent, const edm::EventSetup&) override;
     void endJob() override;
 
     // tokens
@@ -53,9 +51,6 @@ private:
     edm::EDGetTokenT<reco::VertexCollection> vertexToken_;
     edm::EDGetTokenT<edm::View<reco::Vertex>> secondaryVertexToken_;
     edm::EDGetTokenT<TrackingVertexCollection> tvToken_;
-    // edm::EDGetTokenT<reco::SecondaryVertexTagInfo> secondaryVertexToken_;
-
-    // edm::InputTag svTagInfoProducer_;
 
     VertexClassifier classifier_;
 
@@ -165,8 +160,6 @@ Ntuplizer::Ntuplizer(const edm::ParameterSet& iConfig)
     classifier_(iConfig, consumesCollector()),
     debug_(iConfig.getParameter<bool>("enableDebug")) {
         event_index = 0;
-        // svTagInfoProducer_ = iConfig.getParameter<edm::InputTag>("secondaryVertices");
-        // consumes<reco::SecondaryVertexTagInfoCollection>(iConfig.getParameter<edm::InputTag>("secondaryVertices"));
     };
 
 Ntuplizer::~Ntuplizer() {
@@ -358,8 +351,6 @@ void Ntuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& setup) 
     iEvent.getByToken(tvToken_, tvCollectionH);
     const TrackingVertexCollection& tvCollection = *(tvCollectionH.product());
 
-    // edm::Handle<reco::SecondaryVertexTagInfoCollection> svTagInfoCollection;
-    // iEvent.getByLabel(svTagInfoProducer_, svTagInfoCollection);
     edm::Handle<edm::View<reco::Vertex>> svH;
     iEvent.getByToken(secondaryVertexToken_, svH);
     const auto& secondaryVertices = *(svH.product());
