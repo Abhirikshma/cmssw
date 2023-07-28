@@ -127,6 +127,8 @@ private:
     // vertex (IVF) association
     std::vector<std::vector<unsigned int>> vert_TV_recoToSim;
     std::vector<std::vector<double>> vert_TV_recoToSim_qual;
+    std::vector<std::vector<unsigned int>> vert_TV_simToReco;
+    std::vector<std::vector<unsigned int>> vert_TV_simToReco_qual;
 
     // tracking vertices
     std::vector<double> tv_x;
@@ -218,6 +220,8 @@ void Ntuplizer::clearVariables() {
 
     vert_TV_recoToSim.clear();
     vert_TV_recoToSim_qual.clear();
+    vert_TV_simToReco.clear();
+    vert_TV_simToReco_qual.clear();
 
     tv_x.clear();
     tv_y.clear();
@@ -301,6 +305,8 @@ void Ntuplizer::beginJob() {
 
     v_assoc_tree_->Branch("recoToSimMap", &vert_TV_recoToSim);
     v_assoc_tree_->Branch("recoToSimQual", &vert_TV_recoToSim_qual);
+    v_assoc_tree_->Branch("simToRecoMap", &vert_TV_simToReco);
+    v_assoc_tree_->Branch("simToRecoQual", &vert_TV_simToReco_qual);
 
     // tracking vertices
     tv_tree_ = fs->make<TTree>("trackingVertices", "tracking vertices");
@@ -373,12 +379,24 @@ void Ntuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& setup) 
     // Associations: reco IVF vertices -> TrackingVertices
     const auto& vert_associator = iEvent.get(vertAssocToken_);
     reco::VertexRecoToSimCollection vertToTvMap = vert_associator.associateRecoToSim(svH, tvCollectionH);
+    reco::VertexSimToRecoCollection tvToVertMap = vert_associator.associateSimToReco(svH, tvCollectionH);
     if (debug_) {
         std::cout << "VertexRecoToSim size " << vertToTvMap.size() << std::endl;
+        std::cout << "VertexSimToReco size " << tvToVertMap.size() << std::endl;
         std::cout << "Number of TrackingVertices " << tvCollection.size() << std::endl;
     }
 
+    // making Ref::key() to index maps for secondary vertices
+    // used while saving the VertexSimToReco maps 
+    RefKeyToIndex svKeyToIndex;
+    for (unsigned int i=0; i < secondaryVertices.size(); ++i) {
+        reco::VertexBaseRef v_ref (svH, i);
+        svKeyToIndex[v_ref.key()] = i;
+    }
+
     RefKeyToIndex tvKeyToIndex; // map from Ref::key() to index for TVs
+    vert_TV_simToReco.resize(tvCollection.size());
+    vert_TV_simToReco_qual.resize(tvCollection.size());
     // tracking vertex loop
     for (unsigned int i=0; i < tvCollection.size(); ++i) {
         TrackingVertexRef tv_ref(tvCollectionH, i);
@@ -394,6 +412,19 @@ void Ntuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& setup) 
         if (classifier_.is(VertexCategories::TertiaryVertex)) tv_isTertiary.push_back(true); else tv_isTertiary.push_back(false);
         if (classifier_.is(VertexCategories::BWeakDecay)) tv_isBWeak.push_back(true); else tv_isBWeak.push_back(false);
         if (classifier_.is(VertexCategories::CWeakDecay)) tv_isCWeak.push_back(true); else tv_isCWeak.push_back(false);
+
+        // vertex sim-to-reco
+        auto foundHere = tvToVertMap.find(tv_ref);
+        if (foundHere != tvToVertMap.end()) {
+            auto foundVal = tvToVertMap[tv_ref];
+            if (foundVal.size() != 0) {
+                for (const auto& val_i : foundVal) {
+                    unsigned int id = svKeyToIndex.at(val_i.first.key());
+                    vert_TV_simToReco[i].push_back(id);
+                    vert_TV_simToReco_qual[i].push_back(val_i.second);
+                }
+            }
+        }
     }
 
     track_TP_recoToSim.resize(tracks.size());
@@ -511,9 +542,9 @@ void Ntuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& setup) 
             auto foundVal = vertToTvMap[v_ref];
             if (foundVal.size() != 0) {
                 for (const auto& val_i : foundVal) {
-                    unsigned int id = tvKeyToIndex.at(val_i.first.key());
+                    unsigned int id = tvKeyToIndex.at(val_i.first.key()); // ask in map for index of TVs
                     if (debug_) std::cout << "index " << id << std::endl;
-                    vert_TV_recoToSim[i].push_back(id); // ask in map for index of TVs
+                    vert_TV_recoToSim[i].push_back(id); 
                     vert_TV_recoToSim_qual[i].push_back(val_i.second);
                     
                     if (debug_) {
